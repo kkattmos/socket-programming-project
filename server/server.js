@@ -1,10 +1,14 @@
+require("dotenv").config();
+
 const net = require("node:net");
+const database = require("../database/database");
 const { encodeFrame, createFrameDecoder } = require("../shared/protocol");
 
 const host = process.env.CHAT_HOST || "0.0.0.0";
 const port = Number(process.env.CHAT_PORT || 5050);
 const clients = new Map();
-const groups = new Map();
+const registeringNames = new Set();
+let groups = new Map();
 
 function cleanText(value, maxLength) {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
@@ -35,7 +39,12 @@ function sendError(socket, message) {
   send(socket, { type: "error", message });
 }
 
-function handleRegisteredMessage(socket, username, message) {
+async function sendHistory(socket, username) {
+  const history = await database.getHistory(username);
+  send(socket, { type: "history", ...history });
+}
+
+async function handleRegisteredMessage(socket, username, message) {
   switch (message.type) {
     case "private_message": {
       const to = cleanText(message.to, 30);
@@ -45,12 +54,13 @@ function handleRegisteredMessage(socket, username, message) {
       const recipient = clients.get(to);
       if (!recipient) return sendError(socket, `User '${to}' is not connected.`);
 
+      const timestamp = await database.savePrivateMessage(username, to, text);
       const event = {
         type: "private_message",
         from: username,
         to,
         text,
-        timestamp: new Date().toISOString(),
+        timestamp,
       };
       send(socket, event);
       if (recipient !== socket) send(recipient, event);
@@ -62,6 +72,12 @@ function handleRegisteredMessage(socket, username, message) {
       if (!group) return sendError(socket, "Group name is required.");
       if (groups.has(group)) return sendError(socket, `Group '${group}' already exists.`);
 
+      try {
+        await database.createGroup(group, username);
+      } catch (error) {
+        if (error.code === "23505") return sendError(socket, `Group '${group}' already exists.`);
+        throw error;
+      }
       groups.set(group, new Set([username]));
       broadcastState();
       break;
@@ -71,8 +87,14 @@ function handleRegisteredMessage(socket, username, message) {
       const group = cleanText(message.group, 40);
       const members = groups.get(group);
       if (!members) return sendError(socket, `Group '${group}' does not exist.`);
+      if (members.has(username)) return sendError(socket, `You are already a member of '${group}'.`);
+
+      const joined = await database.joinGroup(group, username);
+      if (!joined) return sendError(socket, `Could not join '${group}'.`);
       members.add(username);
       broadcastState();
+      const groupMessages = await database.getGroupHistory(group, username);
+      send(socket, { type: "history", privateMessages: [], groupMessages });
       break;
     }
 
@@ -84,12 +106,13 @@ function handleRegisteredMessage(socket, username, message) {
       if (!members.has(username)) return sendError(socket, `Join '${group}' before sending a message.`);
       if (!text) return sendError(socket, "Message cannot be empty.");
 
+      const timestamp = await database.saveGroupMessage(group, username, text);
       const event = {
         type: "group_message",
         group,
         from: username,
         text,
-        timestamp: new Date().toISOString(),
+        timestamp,
       };
       for (const member of members) {
         const memberSocket = clients.get(member);
@@ -107,27 +130,49 @@ const server = net.createServer((socket) => {
   socket.setKeepAlive(true);
   socket.setNoDelay(true);
   let username = null;
+  let messageQueue = Promise.resolve();
 
-  const decode = createFrameDecoder(
-    (message) => {
-      if (!username) {
-        if (message.type !== "register") {
-          return sendError(socket, "Register a name before using chat.");
-        }
-
-        const requestedName = cleanText(message.name, 30);
-        if (!requestedName) return sendError(socket, "A name is required.");
-        if (clients.has(requestedName)) return sendError(socket, "That name is already connected.");
-
-        username = requestedName;
-        clients.set(username, socket);
-        console.log(`${username} connected from ${socket.remoteAddress}:${socket.remotePort}`);
-        send(socket, { type: "registered", name: username });
-        broadcastState();
+  async function processMessage(message) {
+    if (!username) {
+      if (message.type !== "register") {
+        sendError(socket, "Register a name before using chat.");
         return;
       }
 
-      handleRegisteredMessage(socket, username, message);
+      const requestedName = cleanText(message.name, 30);
+      if (!requestedName) return sendError(socket, "A name is required.");
+      if (clients.has(requestedName) || registeringNames.has(requestedName)) {
+        return sendError(socket, "That name is already connected.");
+      }
+
+      registeringNames.add(requestedName);
+      try {
+        await database.ensureUser(requestedName);
+        if (socket.destroyed) return;
+        username = requestedName;
+        clients.set(username, socket);
+      } finally {
+        registeringNames.delete(requestedName);
+      }
+
+      console.log(`${username} connected from ${socket.remoteAddress}:${socket.remotePort}`);
+      send(socket, { type: "registered", name: username });
+      broadcastState();
+      await sendHistory(socket, username);
+      return;
+    }
+
+    await handleRegisteredMessage(socket, username, message);
+  }
+
+  const decode = createFrameDecoder(
+    (message) => {
+      messageQueue = messageQueue
+        .then(() => processMessage(message))
+        .catch((error) => {
+          console.error(`Message handling error: ${error.message}`);
+          sendError(socket, "The server could not complete that operation.");
+        });
     },
     (error) => {
       sendError(socket, error.message);
@@ -140,7 +185,6 @@ const server = net.createServer((socket) => {
   socket.on("close", () => {
     if (username && clients.get(username) === socket) {
       clients.delete(username);
-      for (const members of groups.values()) members.delete(username);
       console.log(`${username} disconnected`);
       broadcastState();
     }
@@ -152,8 +196,36 @@ server.on("error", (error) => {
   process.exitCode = 1;
 });
 
-server.listen(port, host, () => {
-  console.log(`Chat server listening on ${host}:${port}`);
+async function start() {
+  await database.initialize();
+  groups = await database.loadGroups();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, host, () => {
+      server.off("error", reject);
+      console.log(`Chat server listening on ${host}:${server.address().port}`);
+      resolve();
+    });
+  });
+}
+
+async function resetForTests() {
+  if (clients.size > 0) throw new Error("Cannot reset the database while clients are connected");
+  await database.clearAll();
+  groups = new Map();
+}
+
+async function shutdown() {
+  if (server.listening) {
+    await new Promise((resolve) => server.close(resolve));
+  }
+  await database.close();
+}
+
+const ready = start().catch((error) => {
+  console.error(`Startup error: ${error.message}`);
+  process.exitCode = 1;
+  throw error;
 });
 
-module.exports = { server };
+module.exports = { server, ready, resetForTests, shutdown };

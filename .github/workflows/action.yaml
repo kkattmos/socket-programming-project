@@ -16,6 +16,24 @@ jobs:
     name: Lint, build, and test
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      DATABASE_URL: postgresql://chat_user:chat_password@127.0.0.1:5432/socket_chat
+      DATABASE_SCHEMA: chat_test
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: socket_chat
+          POSTGRES_USER: chat_user
+          POSTGRES_PASSWORD: chat_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U chat_user -d socket_chat"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     steps:
       - name: Check out repository

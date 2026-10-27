@@ -6,7 +6,9 @@ const { encodeFrame, createFrameDecoder } = require("../shared/protocol");
 
 process.env.CHAT_HOST = "127.0.0.1";
 process.env.CHAT_PORT = "0";
-const { server } = require("../server/server");
+process.env.DATABASE_URL ||= "postgresql://chat_user:chat_password@127.0.0.1:5432/socket_chat";
+process.env.DATABASE_SCHEMA = "chat_test";
+const { server, ready, resetForTests, shutdown } = require("../server/server");
 
 function makeClient(port) {
   const socket = net.createConnection({ host: "127.0.0.1", port });
@@ -44,16 +46,19 @@ function makeClient(port) {
 }
 
 test("routes private and group messages only through registered TCP clients", async (t) => {
-  if (!server.listening) await once(server, "listening");
+  await ready;
+  await resetForTests();
   const port = server.address().port;
   const alice = makeClient(port);
   const bob = makeClient(port);
   const carol = makeClient(port);
-  t.after(() => {
+  let returningBob = null;
+  t.after(async () => {
     alice.socket.destroy();
     bob.socket.destroy();
     carol.socket.destroy();
-    server.close();
+    returningBob?.socket.destroy();
+    await shutdown();
   });
 
   await Promise.all([once(alice.socket, "connect"), once(bob.socket, "connect"), once(carol.socket, "connect")]);
@@ -82,4 +87,14 @@ test("routes private and group messages only through registered TCP clients", as
   assert.equal((await bob.waitFor((event) => event.type === "group_message")).text, "members only");
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(carol.events.some((event) => event.type === "group_message"), false);
+
+  const bobClosed = once(bob.socket, "close");
+  bob.socket.destroy();
+  await bobClosed;
+  returningBob = makeClient(port);
+  await once(returningBob.socket, "connect");
+  returningBob.send({ type: "register", name: "Bob" });
+  const history = await returningBob.waitFor((event) => event.type === "history");
+  assert.equal(history.privateMessages.some((message) => message.text === "private hello"), true);
+  assert.equal(history.groupMessages.some((message) => message.text === "members only"), true);
 });

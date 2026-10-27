@@ -15,6 +15,10 @@
   "engines": {
     "node": ">=18"
   },
+  "dependencies": {
+    "dotenv": "16.6.1",
+    "pg": "8.16.3"
+  },
   "devDependencies": {
     "@eslint/js": "9.39.1",
     "eslint": "9.39.1",

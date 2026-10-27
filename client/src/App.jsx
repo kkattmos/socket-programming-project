@@ -56,6 +56,20 @@ function App() {
       } else if (event.type === "group_message") {
         const key = `group:${event.group}`;
         setMessages((old) => ({ ...old, [key]: [...(old[key] || []), event] }));
+      } else if (event.type === "history") {
+        setMessages((old) => {
+          const next = { ...old };
+          for (const message of event.privateMessages) {
+            const peer = message.from === currentName.current ? message.to : message.from;
+            const key = `private:${peer}`;
+            next[key] = [...(next[key] || []), message];
+          }
+          for (const message of event.groupMessages) {
+            const key = `group:${message.group}`;
+            next[key] = [...(next[key] || []), message];
+          }
+          return next;
+        });
       } else if (event.type === "error" || event.type === "connection_error") {
         setNotice(event.message);
       } else if (event.type === "disconnected") {

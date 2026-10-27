@@ -9,7 +9,7 @@ export default [
   },
   js.configs.recommended,
   {
-    files: ["server/**/*.js", "bridge/**/*.js", "shared/**/*.js", "test/**/*.js"],
+    files: ["server/**/*.js", "bridge/**/*.js", "database/**/*.js", "shared/**/*.js", "test/**/*.js"],
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "commonjs",

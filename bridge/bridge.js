@@ -10,11 +10,41 @@ const distDirectory = path.join(__dirname, "..", "client", "dist");
 let chatSocket = null;
 let connection = { connected: false, name: "", host: "", port: 0 };
 let chatState = { users: [], groups: [] };
+let chatHistory = { privateMessages: [], groupMessages: [] };
 const eventStreams = new Set();
 
 function emit(message) {
   const line = `data: ${JSON.stringify(message)}\n\n`;
-  for (const response of eventStreams) response.write(line);
+  for (const response of eventStreams) {
+    if (!response.destroyed) response.write(line);
+  }
+}
+
+function messageKey(message) {
+  return message.id
+    ? `${message.type}:${message.id}`
+    : `${message.type}:${message.from}:${message.to || message.group}:${message.timestamp}:${message.text}`;
+}
+
+function mergeMessages(current, incoming) {
+  const known = new Set(current.map(messageKey));
+  return [...current, ...incoming.filter((message) => {
+    const key = messageKey(message);
+    if (known.has(key)) return false;
+    known.add(key);
+    return true;
+  })].sort((left, right) => new Date(left.timestamp) - new Date(right.timestamp));
+}
+
+function rememberMessage(message) {
+  if (message.type === "private_message") {
+    chatHistory.privateMessages = mergeMessages(chatHistory.privateMessages, [message]);
+  } else if (message.type === "group_message") {
+    chatHistory.groupMessages = mergeMessages(chatHistory.groupMessages, [message]);
+  } else if (message.type === "history") {
+    chatHistory.privateMessages = mergeMessages(chatHistory.privateMessages, message.privateMessages || []);
+    chatHistory.groupMessages = mergeMessages(chatHistory.groupMessages, message.groupMessages || []);
+  }
 }
 
 function json(response, status, body) {
@@ -47,6 +77,7 @@ function disconnect() {
   }
   connection = { connected: false, name: "", host: "", port: 0 };
   chatState = { users: [], groups: [] };
+  chatHistory = { privateMessages: [], groupMessages: [] };
 }
 
 function connectToChat({ name, host, port }) {
@@ -65,6 +96,7 @@ function connectToChat({ name, host, port }) {
     let settled = false;
 
     const decode = createFrameDecoder((message) => {
+      rememberMessage(message);
       if (message.type === "state") {
         chatState = { users: message.users, groups: message.groups };
       }
@@ -134,7 +166,9 @@ const bridge = http.createServer(async (request, response) => {
   if (request.method === "OPTIONS") return response.writeHead(204).end();
 
   try {
-    if (request.method === "GET" && request.url === "/api/status") return json(response, 200, { ...connection, ...chatState });
+    if (request.method === "GET" && request.url === "/api/status") {
+      return json(response, 200, { ...connection, ...chatState, history: chatHistory });
+    }
 
     if (request.method === "GET" && request.url === "/api/events") {
       response.writeHead(200, {
@@ -144,6 +178,7 @@ const bridge = http.createServer(async (request, response) => {
       });
       response.write("retry: 1000\n\n");
       eventStreams.add(response);
+      response.write(`data: ${JSON.stringify({ type: "snapshot", connection, state: chatState, history: chatHistory })}\n\n`);
       request.on("close", () => eventStreams.delete(response));
       return;
     }
@@ -169,6 +204,18 @@ const bridge = http.createServer(async (request, response) => {
   } catch (error) {
     json(response, 400, { error: error.message });
   }
+});
+
+const heartbeat = setInterval(() => {
+  for (const response of eventStreams) {
+    if (!response.destroyed) response.write(": heartbeat\n\n");
+  }
+}, 15000);
+heartbeat.unref();
+
+bridge.on("error", (error) => {
+  console.error(`Client bridge error: ${error.message}`);
+  process.exitCode = 1;
 });
 
 bridge.listen(bridgePort, bridgeHost, () => {

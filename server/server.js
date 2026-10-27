@@ -54,13 +54,14 @@ async function handleRegisteredMessage(socket, username, message) {
       const recipient = clients.get(to);
       if (!recipient) return sendError(socket, `User '${to}' is not connected.`);
 
-      const timestamp = await database.savePrivateMessage(username, to, text);
+      const saved = await database.savePrivateMessage(username, to, text);
       const event = {
         type: "private_message",
+        id: saved.id,
         from: username,
         to,
         text,
-        timestamp,
+        timestamp: saved.sent_at,
       };
       send(socket, event);
       if (recipient !== socket) send(recipient, event);
@@ -106,13 +107,14 @@ async function handleRegisteredMessage(socket, username, message) {
       if (!members.has(username)) return sendError(socket, `Join '${group}' before sending a message.`);
       if (!text) return sendError(socket, "Message cannot be empty.");
 
-      const timestamp = await database.saveGroupMessage(group, username, text);
+      const saved = await database.saveGroupMessage(group, username, text);
       const event = {
         type: "group_message",
+        id: saved.id,
         group,
         from: username,
         text,
-        timestamp,
+        timestamp: saved.sent_at,
       };
       for (const member of members) {
         const memberSocket = clients.get(member);

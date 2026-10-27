@@ -16,6 +16,10 @@ const pool = new Pool({
   options: `-c search_path=${schema}`,
 });
 
+pool.on("error", (error) => {
+  console.error(`PostgreSQL pool error: ${error.message}`);
+});
+
 async function initialize() {
   await pool.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
   const schemaSql = await fs.readFile(path.join(__dirname, "schema.sql"), "utf8");
@@ -91,10 +95,10 @@ async function savePrivateMessage(from, to, text) {
      SELECT sender.id, receiver.id, $3
      FROM users sender, users receiver
      WHERE sender.name = $1 AND receiver.name = $2
-     RETURNING sent_at`,
+     RETURNING id, sent_at`,
     [from, to, text],
   );
-  return result.rows[0].sent_at;
+  return result.rows[0];
 }
 
 async function saveGroupMessage(group, from, text) {
@@ -103,34 +107,40 @@ async function saveGroupMessage(group, from, text) {
      SELECT g.id, u.id, $3
      FROM chat_groups g, users u
      WHERE g.name = $1 AND u.name = $2
-     RETURNING sent_at`,
+     RETURNING id, sent_at`,
     [group, from, text],
   );
-  return result.rows[0].sent_at;
+  return result.rows[0];
 }
 
 async function getHistory(username) {
   const [privateResult, groupResult] = await Promise.all([
     pool.query(
-      `SELECT sender.name AS "from", receiver.name AS "to", pm.body AS text, pm.sent_at AS timestamp
-       FROM private_messages pm
-       JOIN users sender ON sender.id = pm.sender_id
-       JOIN users receiver ON receiver.id = pm.receiver_id
-       WHERE sender.name = $1 OR receiver.name = $1
-       ORDER BY pm.sent_at ASC
-       LIMIT 500`,
+      `SELECT * FROM (
+         SELECT pm.id, sender.name AS "from", receiver.name AS "to", pm.body AS text, pm.sent_at AS timestamp
+         FROM private_messages pm
+         JOIN users sender ON sender.id = pm.sender_id
+         JOIN users receiver ON receiver.id = pm.receiver_id
+         WHERE sender.name = $1 OR receiver.name = $1
+         ORDER BY pm.sent_at DESC
+         LIMIT 500
+       ) recent_private_messages
+       ORDER BY timestamp ASC`,
       [username],
     ),
     pool.query(
-      `SELECT g.name AS "group", sender.name AS "from", gm.body AS text, gm.sent_at AS timestamp
-       FROM group_messages gm
-       JOIN chat_groups g ON g.id = gm.group_id
-       JOIN users sender ON sender.id = gm.sender_id
-       JOIN users current_user_record ON current_user_record.name = $1
-       JOIN group_members membership
-         ON membership.group_id = gm.group_id AND membership.user_id = current_user_record.id
-       ORDER BY gm.sent_at ASC
-       LIMIT 500`,
+      `SELECT * FROM (
+         SELECT gm.id, g.name AS "group", sender.name AS "from", gm.body AS text, gm.sent_at AS timestamp
+         FROM group_messages gm
+         JOIN chat_groups g ON g.id = gm.group_id
+         JOIN users sender ON sender.id = gm.sender_id
+         JOIN users current_user_record ON current_user_record.name = $1
+         JOIN group_members membership
+           ON membership.group_id = gm.group_id AND membership.user_id = current_user_record.id
+         ORDER BY gm.sent_at DESC
+         LIMIT 500
+       ) recent_group_messages
+       ORDER BY timestamp ASC`,
       [username],
     ),
   ]);
@@ -143,16 +153,19 @@ async function getHistory(username) {
 
 async function getGroupHistory(group, username) {
   const result = await pool.query(
-    `SELECT g.name AS "group", sender.name AS "from", gm.body AS text, gm.sent_at AS timestamp
-     FROM group_messages gm
-     JOIN chat_groups g ON g.id = gm.group_id
-     JOIN users sender ON sender.id = gm.sender_id
-     JOIN users current_user_record ON current_user_record.name = $2
-     JOIN group_members membership
-       ON membership.group_id = gm.group_id AND membership.user_id = current_user_record.id
-     WHERE g.name = $1
-     ORDER BY gm.sent_at ASC
-     LIMIT 500`,
+    `SELECT * FROM (
+       SELECT gm.id, g.name AS "group", sender.name AS "from", gm.body AS text, gm.sent_at AS timestamp
+       FROM group_messages gm
+       JOIN chat_groups g ON g.id = gm.group_id
+       JOIN users sender ON sender.id = gm.sender_id
+       JOIN users current_user_record ON current_user_record.name = $2
+       JOIN group_members membership
+         ON membership.group_id = gm.group_id AND membership.user_id = current_user_record.id
+       WHERE g.name = $1
+       ORDER BY gm.sent_at DESC
+       LIMIT 500
+     ) recent_group_messages
+     ORDER BY timestamp ASC`,
     [group, username],
   );
   return result.rows.map((row) => ({ ...row, type: "group_message" }));

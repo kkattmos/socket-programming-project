@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { historyMessages, mergeChatMessages } from "./chatState";
 
 async function request(url, options = {}) {
   const response = await fetch(url, {
@@ -12,6 +13,23 @@ async function request(url, options = {}) {
 
 function roomKey(room) {
   return room ? `${room.kind}:${room.name}` : "";
+}
+
+function safeUsers(value) {
+  return Array.isArray(value) ? value.filter((name) => typeof name === "string" && name) : [];
+}
+
+function safeGroups(value) {
+  return Array.isArray(value)
+    ? value
+      .filter((group) => group && typeof group.name === "string")
+      .map((group) => ({ ...group, members: safeUsers(group.members) }))
+    : [];
+}
+
+function formatTime(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 function App() {
@@ -32,8 +50,9 @@ function App() {
       if (status.connected) {
         currentName.current = status.name;
         setConnection(status);
-        setUsers(status.users || []);
-        setGroups(status.groups || []);
+        setUsers(safeUsers(status.users));
+        setGroups(safeGroups(status.groups));
+        setMessages((old) => mergeChatMessages(old, historyMessages(status.history), status.name));
       } else {
         setConnection((current) => ({ ...current, connected: false }));
       }
@@ -41,53 +60,59 @@ function App() {
 
     const events = new EventSource("/api/events");
     events.onmessage = ({ data }) => {
-      const event = JSON.parse(data);
-      if (event.type === "registered") {
-        currentName.current = event.name;
-        setConnection((current) => ({ ...current, connected: true, name: event.name }));
-        setNotice(`Connected as ${event.name}`);
-      } else if (event.type === "state") {
-        setUsers(event.users);
-        setGroups(event.groups);
-      } else if (event.type === "private_message") {
-        const peer = event.from === currentName.current ? event.to : event.from;
-        const key = `private:${peer}`;
-        setMessages((old) => ({ ...old, [key]: [...(old[key] || []), event] }));
-      } else if (event.type === "group_message") {
-        const key = `group:${event.group}`;
-        setMessages((old) => ({ ...old, [key]: [...(old[key] || []), event] }));
-      } else if (event.type === "history") {
-        setMessages((old) => {
-          const next = { ...old };
-          for (const message of event.privateMessages) {
-            const peer = message.from === currentName.current ? message.to : message.from;
-            const key = `private:${peer}`;
-            next[key] = [...(next[key] || []), message];
+      try {
+        const event = JSON.parse(data);
+        if (event.type === "snapshot") {
+          if (event.connection?.connected) {
+            currentName.current = event.connection.name;
+            setConnection(event.connection);
+            setUsers(safeUsers(event.state?.users));
+            setGroups(safeGroups(event.state?.groups));
+            setMessages((old) => mergeChatMessages(old, historyMessages(event.history), event.connection.name));
           }
-          for (const message of event.groupMessages) {
-            const key = `group:${message.group}`;
-            next[key] = [...(next[key] || []), message];
-          }
-          return next;
-        });
-      } else if (event.type === "error" || event.type === "connection_error") {
-        setNotice(event.message);
-      } else if (event.type === "disconnected") {
-        currentName.current = "";
-        setConnection((current) => ({ ...current, connected: false }));
-        setUsers([]);
-        setGroups([]);
-        setActiveRoom(null);
-        setNotice("Disconnected from the server.");
+        } else if (event.type === "registered") {
+          currentName.current = event.name;
+          setConnection((current) => ({ ...current, connected: true, name: event.name }));
+          setNotice(`Connected as ${event.name}`);
+        } else if (event.type === "state") {
+          setUsers(safeUsers(event.users));
+          setGroups(safeGroups(event.groups));
+        } else if (event.type === "private_message" || event.type === "group_message") {
+          setMessages((old) => mergeChatMessages(old, [event], currentName.current));
+        } else if (event.type === "history") {
+          setMessages((old) => mergeChatMessages(old, historyMessages(event), currentName.current));
+        } else if (event.type === "error" || event.type === "connection_error") {
+          setNotice(event.message || "A connection error occurred.");
+        } else if (event.type === "disconnected") {
+          currentName.current = "";
+          setConnection((current) => ({ ...current, connected: false }));
+          setUsers([]);
+          setGroups([]);
+          setActiveRoom(null);
+          setNotice("Disconnected from the server.");
+        }
+      } catch (error) {
+        console.error("Ignored invalid bridge event:", error);
+        setNotice("An invalid update was ignored; the connection is still active.");
       }
     };
-    events.onerror = () => setNotice("The browser lost contact with the local client bridge.");
+    events.onopen = () => setNotice((current) => current === "Reconnecting to the local bridge…" ? "" : current);
+    events.onerror = () => setNotice("Reconnecting to the local bridge…");
     return () => events.close();
   }, []);
 
   const currentMessages = messages[roomKey(activeRoom)] || [];
   const activeGroup = activeRoom?.kind === "group" ? groups.find((group) => group.name === activeRoom.name) : null;
   const isMember = activeGroup?.members.includes(connection.name) ?? false;
+  const onlineUsers = useMemo(() => new Set(users), [users]);
+  const people = useMemo(() => {
+    const names = new Set(users);
+    for (const key of Object.keys(messages)) {
+      if (key.startsWith("private:")) names.add(key.slice("private:".length));
+    }
+    return [...names].sort((left, right) => left.localeCompare(right));
+  }, [messages, users]);
+  const privatePeerOnline = activeRoom?.kind !== "private" || onlineUsers.has(activeRoom.name);
 
   useEffect(() => messageEnd.current?.scrollIntoView({ behavior: "smooth" }), [currentMessages.length]);
 
@@ -134,7 +159,11 @@ function App() {
   }
 
   async function disconnect() {
-    await request("/api/disconnect", { method: "POST", body: "{}" });
+    try {
+      await request("/api/disconnect", { method: "POST", body: "{}" });
+    } catch (error) {
+      setNotice(error.message);
+    }
   }
 
   if (!connection.connected) {
@@ -166,20 +195,20 @@ function App() {
         <section className="profile"><div className="avatar">{initials}</div><div><strong>{connection.name}</strong><span><i /> Connected</span></div></section>
 
         <section className="nav-section">
-          <div className="section-heading"><span>People</span><b>{users.length}</b></div>
+          <div className="section-heading"><span>People</span><b>{people.length}</b></div>
           <div className="room-list">
-            {users.map((user) => <button key={user} className={roomKey(activeRoom) === `private:${user}` ? "active" : ""} onClick={() => setActiveRoom({ kind: "private", name: user })}><span className="mini-avatar">{user[0].toUpperCase()}</span><span>{user}{user === connection.name ? " (you)" : ""}</span></button>)}
+            {people.map((user) => <button type="button" key={user} className={roomKey(activeRoom) === `private:${user}` ? "active" : ""} onClick={() => setActiveRoom({ kind: "private", name: user })}><span className={`mini-avatar ${onlineUsers.has(user) ? "online" : "offline"}`}>{user[0]?.toUpperCase()}</span><span>{user}{user === connection.name ? " (you)" : ""}<small>{onlineUsers.has(user) ? "online" : "offline · history available"}</small></span></button>)}
           </div>
         </section>
 
         <section className="nav-section groups-section">
           <div className="section-heading"><span>Groups</span><b>{groups.length}</b></div>
-          <form className="group-form" onSubmit={createGroup}><input maxLength="40" value={newGroup} onChange={(e) => setNewGroup(e.target.value)} placeholder="New group name" /><button title="Create group">+</button></form>
+          <form className="group-form" onSubmit={createGroup}><input maxLength="40" value={newGroup} onChange={(e) => setNewGroup(e.target.value)} placeholder="New group name" /><button type="submit" title="Create group">+</button></form>
           <div className="room-list">
-            {groups.map((group) => <button key={group.name} className={roomKey(activeRoom) === `group:${group.name}` ? "active" : ""} onClick={() => setActiveRoom({ kind: "group", name: group.name })}><span className="hash">#</span><span><strong>{group.name}</strong><small>{group.members.length} member{group.members.length === 1 ? "" : "s"}</small></span></button>)}
+            {groups.map((group) => <button type="button" key={group.name} className={roomKey(activeRoom) === `group:${group.name}` ? "active" : ""} onClick={() => setActiveRoom({ kind: "group", name: group.name })}><span className="hash">#</span><span><strong>{group.name}</strong><small>{group.members.length} member{group.members.length === 1 ? "" : "s"}</small></span></button>)}
           </div>
         </section>
-        <button className="disconnect" onClick={disconnect}>Disconnect</button>
+        <button type="button" className="disconnect" onClick={disconnect}>Disconnect</button>
       </aside>
 
       <section className="chat-panel">
@@ -195,18 +224,20 @@ function App() {
               {currentMessages.length === 0 && <div className="conversation-start"><strong>No messages yet</strong><span>Start this conversation.</span></div>}
               {currentMessages.map((message, index) => {
                 const mine = message.from === connection.name;
-                return <article className={`message ${mine ? "mine" : ""}`} key={`${message.timestamp}-${index}`}><div className="message-meta"><strong>{message.from}</strong><time>{new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time></div><p>{message.text}</p></article>;
+                return <article className={`message ${mine ? "mine" : ""}`} key={`${message.type}-${message.id || message.timestamp}-${index}`}><div className="message-meta"><strong>{message.from}</strong><time>{formatTime(message.timestamp)}</time></div><p>{message.text}</p></article>;
               })}
               <div ref={messageEnd} />
             </div>
-            {activeGroup && !isMember ? (
-              <div className="join-box"><p>You are not a member of this group.</p><button className="primary" onClick={() => action({ type: "join_group", group: activeGroup.name })}>Join group</button></div>
+            {!privatePeerOnline ? (
+              <div className="join-box"><p>{activeRoom.name} is offline. Previous messages remain available.</p></div>
+            ) : activeGroup && !isMember ? (
+              <div className="join-box"><p>You are not a member of this group.</p><button type="button" className="primary" onClick={() => action({ type: "join_group", group: activeGroup.name })}>Join group</button></div>
             ) : (
               <form className="composer" onSubmit={sendMessage}><input autoFocus maxLength="2000" value={messageText} onChange={(e) => setMessageText(e.target.value)} placeholder={`Message ${activeRoom.name}`} /><button className="send" type="submit" disabled={!messageText.trim()}>Send <span>↗</span></button></form>
             )}
           </>
         )}
-        {notice && <button className="toast" onClick={() => setNotice("")}>{notice}<span>×</span></button>}
+        {notice && <button type="button" className="toast" onClick={() => setNotice("")}>{notice}<span>×</span></button>}
       </section>
     </main>
   );

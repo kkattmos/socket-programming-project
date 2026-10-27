@@ -9,6 +9,8 @@ Computer 1                                      Computer 2
 React UI -> local bridge -> raw TCP socket      React UI -> local bridge
                               \                    /
                                central TCP server
+                                       |
+                                PostgreSQL database
 ```
 
 The browser cannot create raw TCP sockets. Therefore, each physical client computer runs `bridge/bridge.js`. React talks only to its local bridge; the bridge is the network client and communicates with the central server exclusively through a persistent, length-prefixed TCP socket. No WebSocket or Socket.IO service is used.
@@ -16,31 +18,37 @@ The browser cannot create raw TCP sockets. Therefore, each physical client compu
 ## Requirements
 
 - Node.js 18 or newer
+- Docker with Docker Compose on the server computer
 - Two physical computers on the same LAN for the graded demonstration
 
 ## Install and build
 
-On each client computer:
+Install the server tools and React client:
 
 ```bash
+npm install
 npm --prefix client install
 npm run build
 ```
 
-## Start the central server
+## Start PostgreSQL and the central server
 
 On the computer acting as the server:
 
 ```bash
+cp .env.example .env
+docker compose up -d postgres
 npm run server
 ```
 
+Docker stores PostgreSQL data in the named `postgres_data` volume. The server creates the required tables and indexes automatically at startup. Users, groups, memberships, private messages, and group messages survive server restarts.
+
 The server listens on all interfaces at TCP port `5050`. If necessary, allow inbound TCP port 5050 in the computer's firewall. Find this computer's LAN IP address; clients must use that IP, not `127.0.0.1`.
 
-Optional configuration:
+Configuration is read from `.env`. Use `.env.example` as the safe template and do not commit the real `.env` file. To stop PostgreSQL without deleting its data:
 
 ```bash
-CHAT_HOST=0.0.0.0 CHAT_PORT=5050 npm run server
+docker compose stop postgres
 ```
 
 ## Start one client per physical computer
@@ -64,6 +72,7 @@ For frontend development, start the bridge and then run `npm run client`. The bu
 - **R9:** Every client sees all groups and their member lists.
 - **R10:** A user must click **Join group**; creators cannot add other users.
 - **R11:** Only joined members can send and receive group messages.
+- **Persistence:** PostgreSQL restores group membership and permitted message history after reconnecting or restarting the server.
 
 ## Tests
 
@@ -73,6 +82,6 @@ npm run build
 npm test
 ```
 
-The protocol tests verify that TCP messages decode correctly when a frame is split across reads and when several frames arrive in one read.
+Start PostgreSQL with `docker compose up -d postgres` before running tests locally. The tests verify TCP framing, private/group authorization, and PostgreSQL history restoration after reconnecting.
 
 Use `npm run lint:fix` to apply ESLint's safe automatic fixes. The GitHub Actions workflow runs install, lint, build, and test checks for every push and pull request.

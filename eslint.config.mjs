@@ -9,7 +9,7 @@ export default [
   },
   js.configs.recommended,
   {
-    files: ["server/**/*.js", "bridge/**/*.js", "shared/**/*.js", "test/**/*.js"],
+    files: ["server/**/*.js", "bridge/**/*.js", "database/**/*.js", "shared/**/*.js", "test/**/*.js"],
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "commonjs",
@@ -50,6 +50,7 @@ export default [
       ...react.configs.flat.recommended.rules,
       ...react.configs.flat["jsx-runtime"].rules,
       ...reactHooks.configs.recommended.rules,
+      "react/prop-types": "off",
     },
   },
 ];

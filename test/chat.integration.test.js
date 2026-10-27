@@ -6,7 +6,9 @@ const { encodeFrame, createFrameDecoder } = require("../shared/protocol");
 
 process.env.CHAT_HOST = "127.0.0.1";
 process.env.CHAT_PORT = "0";
-const { server } = require("../server/server");
+process.env.DATABASE_URL ||= "postgresql://chat_user:chat_password@127.0.0.1:5432/socket_chat";
+process.env.DATABASE_SCHEMA = "chat_test";
+const { server, ready, resetForTests, shutdown } = require("../server/server");
 
 function makeClient(port) {
   const socket = net.createConnection({ host: "127.0.0.1", port });
@@ -44,16 +46,19 @@ function makeClient(port) {
 }
 
 test("routes private and group messages only through registered TCP clients", async (t) => {
-  if (!server.listening) await once(server, "listening");
+  await ready;
+  await resetForTests();
   const port = server.address().port;
   const alice = makeClient(port);
   const bob = makeClient(port);
   const carol = makeClient(port);
-  t.after(() => {
+  let returningBob = null;
+  t.after(async () => {
     alice.socket.destroy();
     bob.socket.destroy();
     carol.socket.destroy();
-    server.close();
+    returningBob?.socket.destroy();
+    await shutdown();
   });
 
   await Promise.all([once(alice.socket, "connect"), once(bob.socket, "connect"), once(carol.socket, "connect")]);
@@ -69,6 +74,9 @@ test("routes private and group messages only through registered TCP clients", as
   alice.send({ type: "private_message", to: "Bob", text: "private hello" });
   const privateForBob = await bob.waitFor((event) => event.type === "private_message");
   assert.equal(privateForBob.text, "private hello");
+  assert.ok(privateForBob.id);
+  alice.send({ type: "private_message", to: "Bob", text: "second private message" });
+  await bob.waitFor((event) => event.type === "private_message" && event.text === "second private message");
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(carol.events.some((event) => event.type === "private_message"), false);
 
@@ -79,7 +87,22 @@ test("routes private and group messages only through registered TCP clients", as
   bob.send({ type: "join_group", group: "Networks" });
   await bob.waitFor((event) => event.type === "state" && event.groups.some((group) => group.name === "Networks" && group.members.includes("Bob")));
   alice.send({ type: "group_message", group: "Networks", text: "members only" });
-  assert.equal((await bob.waitFor((event) => event.type === "group_message")).text, "members only");
+  const groupForBob = await bob.waitFor((event) => event.type === "group_message");
+  assert.equal(groupForBob.text, "members only");
+  assert.ok(groupForBob.id);
+  bob.send({ type: "group_message", group: "Networks", text: "second group message" });
+  await alice.waitFor((event) => event.type === "group_message" && event.text === "second group message");
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(carol.events.some((event) => event.type === "group_message"), false);
+  const bobClosed = once(bob.socket, "close");
+  bob.socket.destroy();
+  await bobClosed;
+  returningBob = makeClient(port);
+  await once(returningBob.socket, "connect");
+  returningBob.send({ type: "register", name: "Bob" });
+  const history = await returningBob.waitFor((event) => event.type === "history");
+  assert.equal(history.privateMessages.some((message) => message.text === "private hello"), true);
+  assert.equal(history.privateMessages.some((message) => message.text === "second private message"), true);
+  assert.equal(history.groupMessages.some((message) => message.text === "members only"), true);
+  assert.equal(history.groupMessages.some((message) => message.text === "second group message"), true);
 });

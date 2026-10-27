@@ -9,6 +9,7 @@ flowchart LR
     subgraph PC1[Physical Computer 1]
         A[Chat Client A]
         S[Chat Server<br/>TCP port 5050]
+        D[(PostgreSQL<br/>Docker)]
     end
 
     subgraph PC2[Physical Computer 2]
@@ -17,6 +18,7 @@ flowchart LR
 
     A <-->|Persistent TCP socket| S
     B <-->|Persistent TCP socket over LAN| S
+    S <-->|PostgreSQL connection| D
 ```
 
 Example demonstration configuration:
@@ -42,6 +44,7 @@ Before the demonstration, replace “Computer 1's private LAN IPv4 address” wi
 - Listens for and accepts client socket connections.
 - Maintains the connected-client list and verifies that names are unique.
 - Maintains private rooms, groups, and group membership.
+- Persists users, groups, memberships, and message history in PostgreSQL.
 - Routes a private message only to its sender and receiver.
 - Routes a group message only to the clients who joined that group.
 - Removes disconnected clients and broadcasts updated state.
@@ -90,6 +93,14 @@ The server is the authority for shared state. Clients do not connect directly to
 ```
 
 Length-prefixed framing is necessary because TCP is a byte stream: one `recv()` call is not guaranteed to correspond to exactly one `sendall()` call.
+
+### 5. PostgreSQL protocol (server-to-database)
+
+**What it is:** The PostgreSQL wire protocol carries parameterized SQL queries between the Node.js server and the PostgreSQL container.
+
+**Why selected:** Durable storage allows groups, memberships, and authorized message history to survive disconnects and server restarts.
+
+**How used:** Only the central server accesses PostgreSQL through the `pg` driver. Clients never connect to the database, and chat delivery between clients and the server still uses only the custom TCP socket protocol.
 
 ## R2: Socket-programming-only message path
 

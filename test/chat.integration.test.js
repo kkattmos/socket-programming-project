@@ -8,6 +8,10 @@ process.env.CHAT_HOST = "127.0.0.1";
 process.env.CHAT_PORT = "0";
 process.env.DATABASE_URL ||= "postgresql://chat_user:chat_password@127.0.0.1:5432/socket_chat";
 process.env.DATABASE_SCHEMA = "chat_test";
+const { setGeneratorForTests } = require("../shared/ai-service");
+setGeneratorForTests(async (messages) => [{
+  generated_text: [...messages, { role: "assistant", content: "Test chatbot reply" }],
+}]);
 const { server, ready, resetForTests, shutdown } = require("../server/server");
 
 function makeClient(port) {
@@ -77,6 +81,10 @@ test("routes private and group messages only through registered TCP clients", as
   assert.ok(privateForBob.id);
   alice.send({ type: "private_message", to: "Bob", text: "second private message" });
   await bob.waitFor((event) => event.type === "private_message" && event.text === "second private message");
+  alice.send({ type: "private_message", to: "Bob", text: "@chatbot answer privately" });
+  const privateBotReply = await bob.waitFor((event) => event.type === "private_message" && event.from === "Chatbot");
+  assert.equal(privateBotReply.text, "Test chatbot reply");
+  assert.deepEqual(privateBotReply.roomUsers, ["Alice", "Bob"]);
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(carol.events.some((event) => event.type === "private_message"), false);
 
@@ -92,6 +100,9 @@ test("routes private and group messages only through registered TCP clients", as
   assert.ok(groupForBob.id);
   bob.send({ type: "group_message", group: "Networks", text: "second group message" });
   await alice.waitFor((event) => event.type === "group_message" && event.text === "second group message");
+  alice.send({ type: "group_message", group: "Networks", text: "Please @chatbot answer the group" });
+  const groupBotReply = await bob.waitFor((event) => event.type === "group_message" && event.from === "Chatbot");
+  assert.equal(groupBotReply.text, "Test chatbot reply");
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(carol.events.some((event) => event.type === "group_message"), false);
   const bobClosed = once(bob.socket, "close");
@@ -103,6 +114,8 @@ test("routes private and group messages only through registered TCP clients", as
   const history = await returningBob.waitFor((event) => event.type === "history");
   assert.equal(history.privateMessages.some((message) => message.text === "private hello"), true);
   assert.equal(history.privateMessages.some((message) => message.text === "second private message"), true);
+  assert.equal(history.privateMessages.some((message) => message.from === "Chatbot" && message.text === "Test chatbot reply"), true);
   assert.equal(history.groupMessages.some((message) => message.text === "members only"), true);
   assert.equal(history.groupMessages.some((message) => message.text === "second group message"), true);
+  assert.equal(history.groupMessages.some((message) => message.from === "Chatbot" && message.text === "Test chatbot reply"), true);
 });

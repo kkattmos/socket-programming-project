@@ -68,6 +68,8 @@ input:focus { border-color: #68e3be; box-shadow: 0 0 0 3px #68e3be18; }
 .message-meta strong { color: #c1cbda; }
 .message p { margin: 0; padding: 12px 15px; border: 1px solid #273244; border-radius: 4px 15px 15px; color: #dce4ef; background: #121b29; line-height: 1.5; overflow-wrap: anywhere; }
 .message.mine p { border-color: #367c69; border-radius: 15px 4px 15px 15px; color: #dffff4; background: #183d35; }
+.message.bot p { border-color: #6856a8; color: #eee9ff; background: #211b38; }
+.message.bot .message-meta strong { color: #bdaeff; }
 .composer { display: flex; gap: 10px; padding: 18px max(30px, calc((100% - 850px) / 2)); border-top: 1px solid #202939; background: #0d1420; }
 .composer input { flex: 1; }
 .send { border: 0; border-radius: 10px; padding: 0 19px; color: #07100e; background: #68e3be; font-weight: 700; }

@@ -29,3 +29,19 @@ test("client message state sorts restored messages chronologically", async () =>
 
   assert.deepEqual(state["group:Networks"].map((message) => message.text), ["first", "second"]);
 });
+
+test("places a chatbot private reply in the original users' room", async () => {
+  const { mergeChatMessages } = await import("../client/src/chatState.js");
+  const botReply = {
+    type: "private_message",
+    id: "9",
+    from: "Chatbot",
+    to: "Bob",
+    roomUsers: ["Alice", "Bob"],
+    text: "Here is the answer.",
+    timestamp: "2026-10-27T12:00:00.000Z",
+  };
+
+  assert.equal(mergeChatMessages({}, [botReply], "Alice")["private:Bob"][0].from, "Chatbot");
+  assert.equal(mergeChatMessages({}, [botReply], "Bob")["private:Alice"][0].from, "Chatbot");
+});

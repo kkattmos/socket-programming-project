@@ -16,6 +16,13 @@ function identity(message) {
     : `${message.type}:${message.from}:${message.to || message.group}:${message.timestamp}:${message.text}`;
 }
 
+function privatePeer(message, currentName) {
+  if (Array.isArray(message.roomUsers) && message.roomUsers.includes(currentName)) {
+    return message.roomUsers.find((name) => name !== currentName) || currentName;
+  }
+  return message.from === currentName ? message.to : message.from;
+}
+
 export function mergeChatMessages(current, incoming, currentName) {
   const next = { ...current };
 
@@ -24,7 +31,7 @@ export function mergeChatMessages(current, incoming, currentName) {
     if (!message) continue;
 
     const peer = message.type === "private_message"
-      ? (message.from === currentName ? message.to : message.from)
+      ? privatePeer(message, currentName)
       : message.group;
     const room = `${message.type === "private_message" ? "private" : "group"}:${peer}`;
     const roomMessages = next[room] || [];

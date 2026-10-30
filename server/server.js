@@ -3,6 +3,11 @@ require("dotenv").config();
 const net = require("node:net");
 const database = require("../database/database");
 const { encodeFrame, createFrameDecoder } = require("../shared/protocol");
+const {
+  CHATBOT_NAME,
+  containsChatbotMention,
+  generateChatbotReply,
+} = require("../shared/ai-service");
 
 const host = process.env.CHAT_HOST || "0.0.0.0";
 const port = Number(process.env.CHAT_PORT || 5050);
@@ -44,6 +49,15 @@ async function sendHistory(socket, username) {
   send(socket, { type: "history", ...history });
 }
 
+async function chatbotReply(text) {
+  try {
+    return await generateChatbotReply(text);
+  } catch (error) {
+    console.error(`Chatbot error: ${error.message}`);
+    return "Sorry, I could not generate a reply right now. Please check the Hugging Face configuration and try again.";
+  }
+}
+
 async function handleRegisteredMessage(socket, username, message) {
   switch (message.type) {
     case "private_message": {
@@ -62,9 +76,27 @@ async function handleRegisteredMessage(socket, username, message) {
         to,
         text,
         timestamp: saved.sent_at,
+        roomUsers: [username, to],
       };
       send(socket, event);
       if (recipient !== socket) send(recipient, event);
+
+      if (containsChatbotMention(text)) {
+        const reply = await chatbotReply(text);
+        const botSaved = await database.savePrivateChatbotMessage(username, to, reply, CHATBOT_NAME);
+        const botEvent = {
+          type: "private_message",
+          id: botSaved.id,
+          from: CHATBOT_NAME,
+          to,
+          text: reply,
+          timestamp: botSaved.sent_at,
+          roomUsers: [username, to],
+          bot: true,
+        };
+        send(socket, botEvent);
+        if (recipient !== socket) send(recipient, botEvent);
+      }
       break;
     }
 
@@ -120,6 +152,24 @@ async function handleRegisteredMessage(socket, username, message) {
         const memberSocket = clients.get(member);
         if (memberSocket) send(memberSocket, event);
       }
+
+      if (containsChatbotMention(text)) {
+        const reply = await chatbotReply(text);
+        const botSaved = await database.saveGroupMessage(group, CHATBOT_NAME, reply);
+        const botEvent = {
+          type: "group_message",
+          id: botSaved.id,
+          group,
+          from: CHATBOT_NAME,
+          text: reply,
+          timestamp: botSaved.sent_at,
+          bot: true,
+        };
+        for (const member of members) {
+          const memberSocket = clients.get(member);
+          if (memberSocket) send(memberSocket, botEvent);
+        }
+      }
       break;
     }
 
@@ -143,6 +193,9 @@ const server = net.createServer((socket) => {
 
       const requestedName = cleanText(message.name, 30);
       if (!requestedName) return sendError(socket, "A name is required.");
+      if (requestedName.toLowerCase() === CHATBOT_NAME.toLowerCase()) {
+        return sendError(socket, `The name '${CHATBOT_NAME}' is reserved.`);
+      }
       if (clients.has(requestedName) || registeringNames.has(requestedName)) {
         return sendError(socket, "That name is already connected.");
       }
@@ -200,6 +253,7 @@ server.on("error", (error) => {
 
 async function start() {
   await database.initialize();
+  await database.ensureUser(CHATBOT_NAME);
   groups = await database.loadGroups();
   await new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -214,6 +268,7 @@ async function start() {
 async function resetForTests() {
   if (clients.size > 0) throw new Error("Cannot reset the database while clients are connected");
   await database.clearAll();
+  await database.ensureUser(CHATBOT_NAME);
   groups = new Map();
 }
 

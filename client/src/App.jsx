@@ -224,7 +224,8 @@ function App() {
               {currentMessages.length === 0 && <div className="conversation-start"><strong>No messages yet</strong><span>Start this conversation.</span></div>}
               {currentMessages.map((message, index) => {
                 const mine = message.from === connection.name;
-                return <article className={`message ${mine ? "mine" : ""}`} key={`${message.type}-${message.id || message.timestamp}-${index}`}><div className="message-meta"><strong>{message.from}</strong><time>{formatTime(message.timestamp)}</time></div><p>{message.text}</p></article>;
+                const bot = message.from === "Chatbot";
+                return <article className={`message ${mine ? "mine" : ""} ${bot ? "bot" : ""}`} key={`${message.type}-${message.id || message.timestamp}-${index}`}><div className="message-meta"><strong>{message.from}</strong><time>{formatTime(message.timestamp)}</time></div><p>{message.text}</p></article>;
               })}
               <div ref={messageEnd} />
             </div>

@@ -17,7 +17,7 @@ The browser cannot create raw TCP sockets. Therefore, each physical client compu
 
 ## Requirements
 
-- Node.js 18 or newer
+- Node.js 20 or newer
 - Docker with Docker Compose on the server computer
 - Two physical computers on the same LAN for the graded demonstration
 
@@ -51,6 +51,29 @@ Configuration is read from `.env`. Use `.env.example` as the safe template and d
 docker compose stop postgres
 ```
 
+## Hugging Face chatbot
+
+The chatbot runs locally in the Node.js server with Transformers.js; it does not call the hosted Hugging Face inference API and does not require a token for the default public model. Configure it in `.env`:
+
+```text
+HF_LOCAL_MODEL=HuggingFaceTB/SmolLM2-360M-Instruct
+HF_DTYPE=q4
+HF_CACHE_DIR=.cache/huggingface
+HF_MAX_NEW_TOKENS=200
+```
+
+The first `@chatbot` request downloads the quantized ONNX model into the configured cache, so it is slower than later requests and requires an internet connection. Model files in that cache are reused across server restarts, and one loaded pipeline is reused in memory while the server process remains running. Restarting the server reloads the pipeline into memory but does not download the cached files again. To run from model files already stored on the server, set `HF_LOCAL_MODEL_PATH` and set `HF_ALLOW_REMOTE_MODELS=false`.
+
+Chatbot generation runs as background work after the user's message is saved and delivered. The sender can immediately send another message, create a room, or perform another action while the model is generating. Generation requests are still processed one at a time so the shared local pipeline is not run concurrently.
+
+Mention `@chatbot` anywhere in a private or group message:
+
+```text
+@chatbot explain the difference between TCP and UDP
+```
+
+The server runs the prompt through the local model, saves the response as a message from `Chatbot`, and routes it through the original room. In a private room only the two participants receive it; in a group only group members receive it.
+
 ## Start one client per physical computer
 
 On each computer that will run a client:
@@ -73,6 +96,7 @@ For frontend development, start the bridge and then run `npm run client`. The bu
 - **R10:** A user must click **Join group**; creators cannot add other users.
 - **R11:** Only joined members can send and receive group messages.
 - **Persistence:** PostgreSQL restores group membership and permitted message history after reconnecting or restarting the server.
+- **AI feature:** `@chatbot` generates a Hugging Face response inside the invoking private or group room.
 
 ## Tests
 

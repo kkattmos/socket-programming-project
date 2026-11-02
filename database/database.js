@@ -91,12 +91,29 @@ async function joinGroup(groupName, username) {
 
 async function savePrivateMessage(from, to, text) {
   const result = await pool.query(
-    `INSERT INTO private_messages (sender_id, receiver_id, body)
-     SELECT sender.id, receiver.id, $3
+    `INSERT INTO private_messages (sender_id, receiver_id, body, room_user_one_id, room_user_two_id)
+     SELECT sender.id, receiver.id, $3,
+            LEAST(sender.id, receiver.id), GREATEST(sender.id, receiver.id)
      FROM users sender, users receiver
      WHERE sender.name = $1 AND receiver.name = $2
      RETURNING id, sent_at`,
     [from, to, text],
+  );
+  return result.rows[0];
+}
+
+async function savePrivateChatbotMessage(participantOne, participantTwo, text, chatbotName) {
+  const result = await pool.query(
+    `INSERT INTO private_messages (sender_id, receiver_id, body, room_user_one_id, room_user_two_id)
+     SELECT chatbot.id, participant_two.id, $4,
+            LEAST(participant_one.id, participant_two.id),
+            GREATEST(participant_one.id, participant_two.id)
+     FROM users chatbot, users participant_one, users participant_two
+     WHERE chatbot.name = $1
+       AND participant_one.name = $2
+       AND participant_two.name = $3
+     RETURNING id, sent_at`,
+    [chatbotName, participantOne, participantTwo, text],
   );
   return result.rows[0];
 }
@@ -117,11 +134,15 @@ async function getHistory(username) {
   const [privateResult, groupResult] = await Promise.all([
     pool.query(
       `SELECT * FROM (
-         SELECT pm.id, sender.name AS "from", receiver.name AS "to", pm.body AS text, pm.sent_at AS timestamp
+         SELECT pm.id, sender.name AS "from", receiver.name AS "to", pm.body AS text,
+                pm.sent_at AS timestamp,
+                ARRAY[room_one.name, room_two.name] AS "roomUsers"
          FROM private_messages pm
          JOIN users sender ON sender.id = pm.sender_id
          JOIN users receiver ON receiver.id = pm.receiver_id
-         WHERE sender.name = $1 OR receiver.name = $1
+         JOIN users room_one ON room_one.id = pm.room_user_one_id
+         JOIN users room_two ON room_two.id = pm.room_user_two_id
+         WHERE room_one.name = $1 OR room_two.name = $1
          ORDER BY pm.sent_at DESC
          LIMIT 500
        ) recent_private_messages
@@ -187,6 +208,7 @@ module.exports = {
   createGroup,
   joinGroup,
   savePrivateMessage,
+  savePrivateChatbotMessage,
   saveGroupMessage,
   getHistory,
   getGroupHistory,

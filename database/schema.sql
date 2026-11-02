@@ -26,6 +26,17 @@ CREATE TABLE IF NOT EXISTS private_messages (
   sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE private_messages
+  ADD COLUMN IF NOT EXISTS room_user_one_id BIGINT REFERENCES users(id);
+
+ALTER TABLE private_messages
+  ADD COLUMN IF NOT EXISTS room_user_two_id BIGINT REFERENCES users(id);
+
+UPDATE private_messages
+SET room_user_one_id = LEAST(sender_id, receiver_id),
+    room_user_two_id = GREATEST(sender_id, receiver_id)
+WHERE room_user_one_id IS NULL OR room_user_two_id IS NULL;
+
 CREATE TABLE IF NOT EXISTS group_messages (
   id BIGSERIAL PRIMARY KEY,
   group_id BIGINT NOT NULL REFERENCES chat_groups(id) ON DELETE CASCADE,

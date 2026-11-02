@@ -75,6 +75,13 @@ test("routes private and group messages only through registered TCP clients", as
     carol.waitFor((event) => event.type === "registered"),
   ]);
 
+  let releaseChatbot;
+  const chatbotCanReply = new Promise((resolve) => { releaseChatbot = resolve; });
+  setGeneratorForTests(async (messages) => {
+    await chatbotCanReply;
+    return [{ generated_text: [...messages, { role: "assistant", content: "Test chatbot reply" }] }];
+  });
+
   alice.send({ type: "private_message", to: "Bob", text: "private hello" });
   const privateForBob = await bob.waitFor((event) => event.type === "private_message");
   assert.equal(privateForBob.text, "private hello");
@@ -82,6 +89,16 @@ test("routes private and group messages only through registered TCP clients", as
   alice.send({ type: "private_message", to: "Bob", text: "second private message" });
   await bob.waitFor((event) => event.type === "private_message" && event.text === "second private message");
   alice.send({ type: "private_message", to: "Bob", text: "@chatbot answer privately" });
+  await bob.waitFor((event) => event.type === "private_message" && event.text === "@chatbot answer privately");
+  alice.send({ type: "create_group", group: "CreatedWhileChatbotRuns" });
+  try {
+    await alice.waitFor(
+      (event) => event.type === "state" && event.groups.some((group) => group.name === "CreatedWhileChatbotRuns"),
+      1000,
+    );
+  } finally {
+    releaseChatbot();
+  }
   const privateBotReply = await bob.waitFor((event) => event.type === "private_message" && event.from === "Chatbot");
   assert.equal(privateBotReply.text, "Test chatbot reply");
   assert.deepEqual(privateBotReply.roomUsers, ["Alice", "Bob"]);

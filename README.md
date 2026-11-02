@@ -62,7 +62,9 @@ HF_CACHE_DIR=.cache/huggingface
 HF_MAX_NEW_TOKENS=200
 ```
 
-The first `@chatbot` request downloads the quantized ONNX model into the configured cache, so it is slower than later requests and requires an internet connection. Later requests reuse one loaded pipeline. To run from model files already stored on the server, set `HF_LOCAL_MODEL_PATH` and set `HF_ALLOW_REMOTE_MODELS=false`.
+The first `@chatbot` request downloads the quantized ONNX model into the configured cache, so it is slower than later requests and requires an internet connection. Model files in that cache are reused across server restarts, and one loaded pipeline is reused in memory while the server process remains running. Restarting the server reloads the pipeline into memory but does not download the cached files again. To run from model files already stored on the server, set `HF_LOCAL_MODEL_PATH` and set `HF_ALLOW_REMOTE_MODELS=false`.
+
+Chatbot generation runs as background work after the user's message is saved and delivered. The sender can immediately send another message, create a room, or perform another action while the model is generating. Generation requests are still processed one at a time so the shared local pipeline is not run concurrently.
 
 Mention `@chatbot` anywhere in a private or group message:
 

@@ -20,7 +20,7 @@ function cleanText(value, maxLength) {
 }
 
 function send(socket, message) {
-  if (!socket.destroyed) socket.write(encodeFrame(message));
+  if (socket && !socket.destroyed) socket.write(encodeFrame(message));
 }
 
 function publicState() {
@@ -58,6 +58,47 @@ async function chatbotReply(text) {
   }
 }
 
+function runChatbotTask(task, context) {
+  // Model inference can take seconds (and the first run may download the model),
+  // so it must not become part of this socket's ordered message queue.
+  void task().catch((error) => {
+    console.error(`Chatbot ${context} error: ${error.message}`);
+  });
+}
+
+async function sendPrivateChatbotReply({ username, to, text }) {
+  const reply = await chatbotReply(text);
+  const botSaved = await database.savePrivateChatbotMessage(username, to, reply, CHATBOT_NAME);
+  const botEvent = {
+    type: "private_message",
+    id: botSaved.id,
+    from: CHATBOT_NAME,
+    to,
+    text: reply,
+    timestamp: botSaved.sent_at,
+    roomUsers: [username, to],
+    bot: true,
+  };
+  send(clients.get(username), botEvent);
+  if (to !== username) send(clients.get(to), botEvent);
+}
+
+async function sendGroupChatbotReply({ group, text }) {
+  const reply = await chatbotReply(text);
+  const botSaved = await database.saveGroupMessage(group, CHATBOT_NAME, reply);
+  const botEvent = {
+    type: "group_message",
+    id: botSaved.id,
+    group,
+    from: CHATBOT_NAME,
+    text: reply,
+    timestamp: botSaved.sent_at,
+    bot: true,
+  };
+  const members = groups.get(group) || new Set();
+  for (const member of members) send(clients.get(member), botEvent);
+}
+
 async function handleRegisteredMessage(socket, username, message) {
   switch (message.type) {
     case "private_message": {
@@ -82,20 +123,10 @@ async function handleRegisteredMessage(socket, username, message) {
       if (recipient !== socket) send(recipient, event);
 
       if (containsChatbotMention(text)) {
-        const reply = await chatbotReply(text);
-        const botSaved = await database.savePrivateChatbotMessage(username, to, reply, CHATBOT_NAME);
-        const botEvent = {
-          type: "private_message",
-          id: botSaved.id,
-          from: CHATBOT_NAME,
-          to,
-          text: reply,
-          timestamp: botSaved.sent_at,
-          roomUsers: [username, to],
-          bot: true,
-        };
-        send(socket, botEvent);
-        if (recipient !== socket) send(recipient, botEvent);
+        runChatbotTask(
+          () => sendPrivateChatbotReply({ username, to, text }),
+          `private reply for ${username}`,
+        );
       }
       break;
     }
@@ -154,21 +185,10 @@ async function handleRegisteredMessage(socket, username, message) {
       }
 
       if (containsChatbotMention(text)) {
-        const reply = await chatbotReply(text);
-        const botSaved = await database.saveGroupMessage(group, CHATBOT_NAME, reply);
-        const botEvent = {
-          type: "group_message",
-          id: botSaved.id,
-          group,
-          from: CHATBOT_NAME,
-          text: reply,
-          timestamp: botSaved.sent_at,
-          bot: true,
-        };
-        for (const member of members) {
-          const memberSocket = clients.get(member);
-          if (memberSocket) send(memberSocket, botEvent);
-        }
+        runChatbotTask(
+          () => sendGroupChatbotReply({ group, text }),
+          `group reply for ${group}`,
+        );
       }
       break;
     }

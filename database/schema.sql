@@ -26,6 +26,12 @@ CREATE TABLE IF NOT EXISTS private_messages (
   sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS threads (
+  id BIGSERIAL PRIMARY KEY,
+  name VARCHAR(50) NOT NULL,
+  group_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE
+);
+
 ALTER TABLE private_messages
   ADD COLUMN IF NOT EXISTS room_user_one_id BIGINT REFERENCES users(id);
 
@@ -45,6 +51,14 @@ CREATE TABLE IF NOT EXISTS group_messages (
   sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS thread_messages (
+  id BIGSERIAL PRIMARY KEY,
+  thread_id BIGINT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  sender_id BIGINT NOT NULL REFERENCES users(id),
+  body TEXT NOT NULL CHECK (char_length(body) BETWEEN 1 AND 2000),
+  sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS private_messages_sender_idx
   ON private_messages (sender_id, sent_at DESC);
 
@@ -53,6 +67,9 @@ CREATE INDEX IF NOT EXISTS private_messages_receiver_idx
 
 CREATE INDEX IF NOT EXISTS group_messages_group_idx
   ON group_messages (group_id, sent_at DESC);
+
+CREATE INDEX IF NOT EXISTS thread_messages_thread_idx
+  ON thread_messages (thread_id, sent_at DESC);
 
 CREATE INDEX IF NOT EXISTS group_members_user_idx
   ON group_members (user_id);

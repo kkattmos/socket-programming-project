@@ -114,7 +114,9 @@ function App() {
   }, [messages, users]);
   const privatePeerOnline = activeRoom?.kind !== "private" || onlineUsers.has(activeRoom.name);
 
-  useEffect(() => messageEnd.current?.scrollIntoView({ behavior: "smooth" }), [currentMessages.length]);
+  useEffect(() => {
+    messageEnd.current?.scrollIntoView({ behavior: "smooth" });
+  }, [currentMessages.length]);
 
   const initials = useMemo(() => connection.name.slice(0, 2).toUpperCase(), [connection.name]);
 

@@ -90,6 +90,8 @@ The server is the authority for shared state. Clients do not connect directly to
 {"type":"private_message","to":"Bob","text":"Hello"}
 {"type":"join_group","group":"Networks"}
 {"type":"group_message","group":"Networks","text":"Hi everyone"}
+{"type":"summarize_chat","kind":"group","name":"Networks"}
+{"type":"chat_summary","kind":"group","name":"Networks","text":"Alice greeted the group."}
 ```
 
 Length-prefixed framing is necessary because TCP is a byte stream: one `recv()` call is not guaranteed to correspond to exactly one `sendall()` call.

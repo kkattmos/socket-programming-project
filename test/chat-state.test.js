@@ -45,3 +45,15 @@ test("places a chatbot private reply in the original users' room", async () => {
   assert.equal(mergeChatMessages({}, [botReply], "Alice")["private:Bob"][0].from, "Chatbot");
   assert.equal(mergeChatMessages({}, [botReply], "Bob")["private:Alice"][0].from, "Chatbot");
 });
+
+test("stores a summary by room and replaces the pending entry", async () => {
+  const { applySummaryEvent } = await import("../client/src/chatState.js");
+  const next = applySummaryEvent({ "group:A": { pending: true } }, { kind: "group", name: "A", text: "S" });
+  assert.deepEqual(next, { "group:A": { text: "S" } });
+});
+
+test("stores a summary error by room and leaves other rooms alone", async () => {
+  const { applySummaryEvent } = await import("../client/src/chatState.js");
+  const next = applySummaryEvent({ "private:B": { text: "old" } }, { kind: "group", name: "A", error: "E" });
+  assert.deepEqual(next, { "private:B": { text: "old" }, "group:A": { error: "E" } });
+});

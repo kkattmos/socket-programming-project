@@ -7,12 +7,16 @@ const {
   CHATBOT_NAME,
   containsChatbotMention,
   generateChatbotReply,
+  generateChatSummary,
+  resolveChatLimit,
 } = require("../shared/ai-service");
 
 const host = process.env.CHAT_HOST || "0.0.0.0";
 const port = Number(process.env.CHAT_PORT || 5050);
 const clients = new Map();
 const registeringNames = new Set();
+const summarizingUsers = new Set();
+const chatLimit = resolveChatLimit(process.env.CHAT_LIMIT);
 let groups = new Map();
 
 function cleanText(value, maxLength) {
@@ -97,6 +101,44 @@ async function sendGroupChatbotReply({ group, text }) {
   };
   const members = groups.get(group) || new Set();
   for (const member of members) send(clients.get(member), botEvent);
+}
+
+function sendSummary(socket, room, fields) {
+  send(socket, { type: "chat_summary", kind: room.kind, name: room.name, ...fields });
+}
+
+async function summarizeChat(socket, username, room) {
+  try {
+    const messages = room.kind === "group"
+      ? await database.getRecentGroupMessages(room.name, chatLimit)
+      : await database.getRecentPrivateMessages(username, room.name, chatLimit);
+    if (messages.length === 0) {
+      sendSummary(socket, room, { error: "There are no messages to summarize yet." });
+      return;
+    }
+    sendSummary(socket, room, { text: await generateChatSummary(messages) });
+  } catch (error) {
+    console.error(`Chat summary error: ${error.message}`);
+    sendSummary(socket, room, { error: "Sorry, the summary could not be generated right now." });
+  } finally {
+    summarizingUsers.delete(username);
+  }
+}
+
+function requestSummary(socket, username, message) {
+  const room = { kind: message.kind, name: cleanText(message.name, 40) };
+  if ((room.kind !== "private" && room.kind !== "group") || !room.name) {
+    return sendSummary(socket, room, { error: "Choose a chat to summarize." });
+  }
+  if (room.kind === "group" && !groups.get(room.name)?.has(username)) {
+    return sendSummary(socket, room, { error: "Join this group before summarizing it." });
+  }
+  if (summarizingUsers.has(username)) {
+    return sendSummary(socket, room, { error: "A summary is already in progress." });
+  }
+
+  summarizingUsers.add(username);
+  runChatbotTask(() => summarizeChat(socket, username, room), `summary for ${username}`);
 }
 
 async function handleRegisteredMessage(socket, username, message) {
@@ -192,6 +234,10 @@ async function handleRegisteredMessage(socket, username, message) {
       }
       break;
     }
+
+    case "summarize_chat":
+      requestSummary(socket, username, message);
+      break;
 
     default:
       sendError(socket, "Unknown message type.");

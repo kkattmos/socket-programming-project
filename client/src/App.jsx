@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { historyMessages, mergeChatMessages } from "./chatState";
+import { applySummaryEvent, historyMessages, mergeChatMessages } from "./chatState";
 
 async function request(url, options = {}) {
   const response = await fetch(url, {
@@ -42,6 +42,7 @@ function App() {
   const [messageText, setMessageText] = useState("");
   const [newGroup, setNewGroup] = useState("");
   const [notice, setNotice] = useState("");
+  const [summaries, setSummaries] = useState({});
   const messageEnd = useRef(null);
   const currentName = useRef("");
 
@@ -81,6 +82,8 @@ function App() {
           setMessages((old) => mergeChatMessages(old, [event], currentName.current));
         } else if (event.type === "history") {
           setMessages((old) => mergeChatMessages(old, historyMessages(event), currentName.current));
+        } else if (event.type === "chat_summary") {
+          setSummaries((old) => applySummaryEvent(old, event));
         } else if (event.type === "error" || event.type === "connection_error") {
           setNotice(event.message || "A connection error occurred.");
         } else if (event.type === "disconnected") {
@@ -89,6 +92,7 @@ function App() {
           setUsers([]);
           setGroups([]);
           setActiveRoom(null);
+          setSummaries({});
           setNotice("Disconnected from the server.");
         }
       } catch (error) {
@@ -113,6 +117,7 @@ function App() {
     return [...names].sort((left, right) => left.localeCompare(right));
   }, [messages, users]);
   const privatePeerOnline = activeRoom?.kind !== "private" || onlineUsers.has(activeRoom.name);
+  const activeSummary = summaries[roomKey(activeRoom)];
 
   useEffect(() => {
     messageEnd.current?.scrollIntoView({ behavior: "smooth" });
@@ -149,6 +154,29 @@ function App() {
       : { type: "group_message", group: activeRoom.name, text };
     action(payload);
     setMessageText("");
+  }
+
+  async function summarize() {
+    const room = activeRoom;
+    const key = roomKey(room);
+    setSummaries((old) => ({ ...old, [key]: { pending: true } }));
+    try {
+      await request("/api/action", {
+        method: "POST",
+        body: JSON.stringify({ type: "summarize_chat", kind: room.kind, name: room.name }),
+      });
+    } catch (error) {
+      setSummaries((old) => ({ ...old, [key]: { error: error.message } }));
+    }
+  }
+
+  function dismissSummary() {
+    const key = roomKey(activeRoom);
+    setSummaries((old) => {
+      const next = { ...old };
+      delete next[key];
+      return next;
+    });
   }
 
   function createGroup(event) {
@@ -220,8 +248,17 @@ function App() {
           <>
             <header className="chat-header">
               <div><p>{activeRoom.kind === "group" ? "GROUP ROOM" : "PRIVATE ROOM"}</p><h2>{activeRoom.kind === "group" ? `# ${activeRoom.name}` : activeRoom.name}</h2></div>
-              {activeGroup && <div className="members">{activeGroup.members.join(", ")}</div>}
+              <div className="chat-actions">
+                {activeGroup && <div className="members">{activeGroup.members.join(", ")}</div>}
+                <button type="button" className="summarize" onClick={summarize} disabled={activeSummary?.pending || currentMessages.length === 0}>{activeSummary?.pending ? "Summarizing…" : "Summarize"}</button>
+              </div>
             </header>
+            {(activeSummary?.text || activeSummary?.error) && (
+              <section className={`summary-card ${activeSummary.error ? "failed" : ""}`} role="status">
+                <div><strong>Summary · only you can see this</strong><p>{activeSummary.text || activeSummary.error}</p></div>
+                <button type="button" onClick={dismissSummary} aria-label="Dismiss summary">×</button>
+              </section>
+            )}
             <div className="messages">
               {currentMessages.length === 0 && <div className="conversation-start"><strong>No messages yet</strong><span>Start this conversation.</span></div>}
               {currentMessages.map((message, index) => {

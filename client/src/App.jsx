@@ -202,16 +202,15 @@ function App() {
       <main className="login-page">
         <section className="login-card">
           <div className="brand-mark">R</div>
-          <p className="eyebrow">TCP SOCKET CHAT</p>
-          <h1>Join the conversation.</h1>
-          <p className="muted">Connect this computer to the central chat server.</p>
+          <h1>Relay</h1>
+          <p className="muted">Connect this computer to the chat server.</p>
           <form onSubmit={connect} className="login-form">
             <label>Display name<input required maxLength="30" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Alice" /></label>
             <div className="address-row">
               <label>Server address<input required value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} /></label>
               <label>Port<input required type="number" min="1" max="65535" value={form.port} onChange={(e) => setForm({ ...form, port: Number(e.target.value) })} /></label>
             </div>
-            <button className="primary" type="submit">Connect to chat</button>
+            <button className="primary" type="submit">Connect</button>
           </form>
           {notice && <p className="notice">{notice}</p>}
         </section>
@@ -244,15 +243,25 @@ function App() {
 
       <section className="chat-panel">
         {!activeRoom ? (
-          <div className="empty-state"><div className="empty-icon">↗</div><h2>Choose a conversation</h2><p>Select a person or group from the sidebar to open its chat room.</p></div>
+          <div className="empty-state">
+            <div className="empty-icon">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-4 3v-3H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" /><path d="M8 10h8M8 13h5" /></svg>
+            </div>
+            <h2>Choose a conversation</h2>
+            <p>Select a person or group from the sidebar to open its chat room.</p>
+          </div>
         ) : (
           <>
             <header className="chat-header">
-              <div><p>{activeRoom.kind === "group" ? "GROUP ROOM" : "PRIVATE ROOM"}</p><h2>{activeRoom.kind === "group" ? `# ${activeRoom.name}` : activeRoom.name}</h2></div>
-              <div className="chat-actions">
-                {activeGroup && <div className="members">{activeGroup.members.join(", ")}</div>}
-                <button type="button" className="summarize" onClick={summarize} disabled={activeSummary?.pending || currentMessages.length === 0}>{activeSummary?.pending ? "Summarizing…" : "Summarize"}</button>
+              {activeRoom.kind === "group"
+                ? <span className="hash">#</span>
+                : <span className={`mini-avatar ${privatePeerOnline ? "online" : "offline"}`}>{activeRoom.name[0]?.toUpperCase()}</span>}
+              <div className="room-title">
+                <h2>{activeRoom.name}</h2>
+                {activeGroup && <div className="member-chips">{activeGroup.members.map((member) => <span key={member}>{member}</span>)}</div>}
+                {activeRoom.kind === "private" && <span className={`presence ${privatePeerOnline ? "online" : ""}`}>{privatePeerOnline ? "online" : "offline"}</span>}
               </div>
+              <button type="button" className="summarize" onClick={summarize} disabled={activeSummary?.pending || currentMessages.length === 0}>{activeSummary?.pending ? "Summarizing…" : "Summarize"}</button>
             </header>
             {(activeSummary?.text || activeSummary?.error) && (
               <section className={`summary-card ${activeSummary.error ? "failed" : ""}`} role="status">
@@ -265,16 +274,31 @@ function App() {
               {currentMessages.map((message, index) => {
                 const mine = message.from === connection.name;
                 const bot = message.from === "Chatbot";
-                return <article className={`message ${mine ? "mine" : ""} ${bot ? "bot" : ""}`} key={`${message.type}-${message.id || message.timestamp}-${index}`}><div className="message-meta"><strong>{message.from}</strong><time>{formatTime(message.timestamp)}</time></div><p>{message.text}</p></article>;
+                const previous = currentMessages[index - 1];
+                const grouped = Boolean(previous)
+                  && previous.from === message.from
+                  && formatTime(previous.timestamp) === formatTime(message.timestamp)
+                  && new Date(message.timestamp) - new Date(previous.timestamp) < 60_000;
+                return (
+                  <article className={`message ${mine ? "mine" : ""} ${bot ? "bot" : ""} ${grouped ? "grouped" : ""}`} key={`${message.type}-${message.id || message.timestamp}-${index}`}>
+                    {!grouped && <div className="message-meta"><strong>{message.from}</strong><time>{formatTime(message.timestamp)}</time></div>}
+                    <div className="bubble">
+                      <p>{message.text}</p>
+                      <button type="button" className="react-button" aria-label="Add reaction">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M9 10h.01M15 10h.01" /><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0" /></svg>
+                      </button>
+                    </div>
+                  </article>
+                );
               })}
               <div ref={messageEnd} />
             </div>
             {!privatePeerOnline ? (
-              <div className="join-box"><p>{activeRoom.name} is offline. Previous messages remain available.</p></div>
+              <div className="join-box offline"><p>{activeRoom.name} is offline. Previous messages remain available.</p></div>
             ) : activeGroup && !isMember ? (
               <div className="join-box"><p>You are not a member of this group.</p><button type="button" className="primary" onClick={() => action({ type: "join_group", group: activeGroup.name })}>Join group</button></div>
             ) : (
-              <form className="composer" onSubmit={sendMessage}><input autoFocus maxLength="2000" value={messageText} onChange={(e) => setMessageText(e.target.value)} placeholder={`Message ${activeRoom.name}`} /><button className="send" type="submit" disabled={!messageText.trim()}>Send <span>↗</span></button></form>
+              <form className="composer" onSubmit={sendMessage}><input autoFocus maxLength="2000" value={messageText} onChange={(e) => setMessageText(e.target.value)} placeholder={`Message ${activeRoom.name}`} /><button className="send" type="submit" disabled={!messageText.trim()}>Send</button></form>
             )}
           </>
         )}

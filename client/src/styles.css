@@ -275,14 +275,44 @@ label { display: grid; gap: 6px; color: var(--text-2); font-size: 13px; font-wei
   transition: opacity .12s;
 }
 .message.mine .react-button { left: auto; right: 100%; }
-.message:hover .react-button, .react-button:focus-visible { opacity: 1; pointer-events: auto; }
+.message:hover .react-button, .react-button:focus-visible, .message.picking .react-button { opacity: 1; pointer-events: auto; }
+.message.picking .react-button { color: var(--honey); }
 .react-button:hover { color: var(--honey); }
 .react-button svg { width: 18px; height: 18px; }
 
-/* Reaction row — styles ready for the reactions feature; no markup renders it yet. */
+/* Reaction picker: input, quick row, optional grid. Opens above the bubble, or below it when there isn't room above. */
+.reaction-picker {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 5;
+  display: grid;
+  gap: 8px;
+  width: 308px; /* 8 columns × 34px + 7 × 2px gaps + padding and border */
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 10px 28px rgb(0 0 0 / .35);
+}
+.reaction-picker.below { top: calc(100% + 6px); bottom: auto; }
+.message.mine .reaction-picker { left: auto; right: 0; }
+.reaction-picker input { padding: 8px 12px; font-size: 13px; }
+.reaction-hint { margin: -4px 4px 0; color: #f8d79a; font-size: 12px; }
+.quick-reactions { display: flex; justify-content: space-between; }
+.more-reactions { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; padding-top: 8px; border-top: 1px solid var(--line); }
+.quick-reactions button, .more-reactions button { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 0; border-radius: 999px; background: transparent; font-size: 20px; line-height: 1; }
+.quick-reactions button:hover, .more-reactions button:hover { background: var(--surface-2); }
+.quick-reactions .more-toggle { border: 1px solid var(--line); color: var(--text-2); font-size: 18px; }
+.quick-reactions .more-toggle:hover { color: var(--honey); }
+
+/* Reaction row: only rendered when a message has reactions. Each chip is a button that reacts with its emoji. */
 .reactions { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 4px 0; }
-.reaction { display: inline-flex; align-items: center; gap: 4px; padding: 1px 9px; border: 1px solid var(--avatar); border-radius: 999px; color: var(--text-2); background: #3b2f22; font-size: 12px; }
-.reaction.mine { border-color: var(--honey); color: var(--text); }
+.reaction { display: inline-flex; align-items: center; gap: 4px; padding: 1px 9px; border: 1px solid var(--avatar); border-radius: 999px; color: var(--text-2); background: #3b2f22; font-size: 12px; line-height: 1.6; }
+.reaction span { font-size: 14px; }
+.reaction:hover { border-color: var(--muted); color: var(--text); }
+.reaction.mine { border-color: var(--honey); color: var(--text); background: #4a3a1f; }
+.reaction.mine:hover { border-color: var(--honey-hover); }
 
 /* ---------- Composer, join, offline ---------- */
 .composer { display: flex; align-items: flex-end; gap: 10px; padding: 12px max(28px, calc((100% - 820px) / 2)); border-top: 1px solid var(--line); background: var(--surface); }

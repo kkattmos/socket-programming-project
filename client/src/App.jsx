@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { applySummaryEvent, historyMessages, mergeChatMessages } from "./chatState";
+import { applyReactionUpdate, applySummaryEvent, historyMessages, mergeChatMessages, safeReactions } from "./chatState";
+import { MORE_REACTIONS, QUICK_REACTIONS } from "./reactionEmoji";
+import { MAX_EMOJI_LENGTH, isSingleEmoji } from "../../shared/emoji.js";
 
 async function request(url, options = {}) {
   const response = await fetch(url, {
@@ -32,6 +34,14 @@ function formatTime(value) {
   return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+// A page can't open the OS emoji picker itself; it can only tell people the shortcut.
+function emojiPickerHint() {
+  const platform = navigator.userAgentData?.platform || navigator.platform || "";
+  if (/mac/i.test(platform)) return "Any emoji: press ⌃⌘Space";
+  if (/win/i.test(platform)) return "Any emoji: press Win + .";
+  return "Any emoji: paste one here";
+}
+
 function App() {
   const [connection, setConnection] = useState({ connected: false, name: "", host: "127.0.0.1", port: 5050 });
   const [form, setForm] = useState({ name: "", host: "127.0.0.1", port: 5050 });
@@ -43,9 +53,12 @@ function App() {
   const [newGroup, setNewGroup] = useState("");
   const [notice, setNotice] = useState("");
   const [summaries, setSummaries] = useState({});
+  const [reactionPicker, setReactionPicker] = useState(null);
+  const [reactionDraft, setReactionDraft] = useState("");
   const messageEnd = useRef(null);
   const currentName = useRef("");
   const composerInput = useRef(null);
+  const reactionPickerRef = useRef(null);
 
   useEffect(() => {
     request("/api/status").then((status) => {
@@ -83,6 +96,8 @@ function App() {
           setMessages((old) => mergeChatMessages(old, [event], currentName.current));
         } else if (event.type === "history") {
           setMessages((old) => mergeChatMessages(old, historyMessages(event), currentName.current));
+        } else if (event.type === "reaction_update") {
+          setMessages((old) => applyReactionUpdate(old, event));
         } else if (event.type === "chat_summary") {
           setSummaries((old) => applySummaryEvent(old, event));
         } else if (event.type === "error" || event.type === "connection_error") {
@@ -95,6 +110,7 @@ function App() {
           setActiveRoom(null);
           setSummaries({});
           setMessages({});
+          setReactionPicker(null);
           setNotice("Disconnected from the server.");
         }
       } catch (error) {
@@ -132,6 +148,34 @@ function App() {
     textarea.style.height = "auto";
     textarea.style.height = `${textarea.scrollHeight + textarea.offsetHeight - textarea.clientHeight}px`;
   }, [messageText, activeRoom]);
+
+  useLayoutEffect(() => {
+    // Open above the bubble by default; flip below before paint if the top would be cut off
+    // (near the top of the list, or after the "+" grid makes the picker taller).
+    const picker = reactionPickerRef.current;
+    if (!picker || reactionPicker?.placement !== "above") return;
+    const listTop = picker.closest(".messages").getBoundingClientRect().top;
+    if (picker.getBoundingClientRect().top < listTop) {
+      setReactionPicker((current) => current && { ...current, placement: "below" });
+    }
+  }, [reactionPicker]);
+
+  useEffect(() => {
+    // Keep the open picker fully visible inside the scrolling message list.
+    reactionPickerRef.current?.scrollIntoView({ block: "nearest" });
+  }, [reactionPicker]);
+
+  useEffect(() => {
+    // Close the reaction picker when clicking anywhere outside it (its own smiley button toggles it instead).
+    if (!reactionPicker) return;
+    function closeOnOutsideClick(event) {
+      if (!event.target.closest?.(".reaction-picker, .react-button")) setReactionPicker(null);
+    }
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+    };
+  }, [reactionPicker]);
 
   const initials = useMemo(() => connection.name.slice(0, 2).toUpperCase(), [connection.name]);
 
@@ -172,6 +216,28 @@ function App() {
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229) return;
     event.preventDefault();
     event.currentTarget.form.requestSubmit();
+  }
+
+  function react(message, emoji) {
+    action({ type: "react", messageType: message.type, messageId: message.id, emoji });
+    setReactionPicker(null);
+    setReactionDraft("");
+  }
+
+  function toggleReactionPicker(message) {
+    const open = reactionPicker?.room === roomKey(activeRoom) && reactionPicker?.id === message.id;
+    setReactionPicker(open ? null : { room: roomKey(activeRoom), id: message.id, placement: "above", expanded: false });
+    setReactionDraft("");
+  }
+
+  function handleReactionInput(message, value) {
+    // Send as soon as the field holds exactly one valid emoji (the OS picker inserts one and closes).
+    if (isSingleEmoji(value.trim())) react(message, value.trim());
+    else setReactionDraft(value);
+  }
+
+  function toggleMoreReactions() {
+    setReactionPicker((current) => current && { ...current, placement: "above", expanded: !current.expanded });
   }
 
   async function summarize() {
@@ -296,16 +362,47 @@ function App() {
                   && previous.from === message.from
                   && formatTime(previous.timestamp) === formatTime(message.timestamp)
                   && new Date(message.timestamp) - new Date(previous.timestamp) < 60_000;
+                const reactions = safeReactions(message.reactions);
+                const pickerOpen = Boolean(message.id) && reactionPicker?.room === roomKey(activeRoom) && reactionPicker?.id === message.id;
                 return (
-                  <article className={`message ${mine ? "mine" : ""} ${bot ? "bot" : ""} ${!mine && !bot ? "has-avatar" : ""} ${grouped ? "grouped" : ""}`} key={`${message.type}-${message.id || message.timestamp}-${index}`}>
+                  <article className={`message ${mine ? "mine" : ""} ${bot ? "bot" : ""} ${!mine && !bot ? "has-avatar" : ""} ${grouped ? "grouped" : ""} ${pickerOpen ? "picking" : ""}`} key={`${message.type}-${message.id || message.timestamp}-${index}`}>
                     {!mine && !bot && !grouped && <span className="mini-avatar message-avatar" aria-hidden="true">{message.from[0]?.toUpperCase()}</span>}
                     {!grouped && <div className="message-meta"><strong>{message.from}</strong><time>{formatTime(message.timestamp)}</time></div>}
                     <div className="bubble">
                       <p>{message.text}</p>
-                      <button type="button" className="react-button" aria-label="Add reaction">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M9 10h.01M15 10h.01" /><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0" /></svg>
-                      </button>
+                      {message.id && (
+                        <button type="button" className="react-button" aria-label="Add reaction" aria-expanded={pickerOpen} onClick={() => toggleReactionPicker(message)}>
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M9 10h.01M15 10h.01" /><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0" /></svg>
+                        </button>
+                      )}
+                      {pickerOpen && (
+                        <div ref={reactionPickerRef} className={`reaction-picker ${reactionPicker.placement}`} role="dialog" aria-label="Add a reaction" onKeyDown={(e) => { if (e.key === "Escape") setReactionPicker(null); }}>
+                          <input autoFocus maxLength={MAX_EMOJI_LENGTH} value={reactionDraft} onChange={(e) => handleReactionInput(message, e.target.value)} placeholder={emojiPickerHint()} aria-label="Type or pick any emoji" />
+                          {reactionDraft.trim() && <p className="reaction-hint" role="status">Pick one emoji</p>}
+                          <div className="quick-reactions">
+                            {QUICK_REACTIONS.map((emoji) => <button type="button" key={emoji} onClick={() => react(message, emoji)} aria-label={`React with ${emoji}`}>{emoji}</button>)}
+                            <button type="button" className="more-toggle" aria-expanded={reactionPicker.expanded} aria-label={reactionPicker.expanded ? "Fewer emoji" : "More emoji"} onClick={toggleMoreReactions}>{reactionPicker.expanded ? "−" : "+"}</button>
+                          </div>
+                          {reactionPicker.expanded && (
+                            <div className="more-reactions">
+                              {MORE_REACTIONS.map((emoji) => <button type="button" key={emoji} onClick={() => react(message, emoji)} aria-label={`React with ${emoji}`}>{emoji}</button>)}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
+                    {reactions.length > 0 && (
+                      <div className="reactions">
+                        {reactions.map((reaction) => {
+                          const reactedByMe = reaction.users.includes(connection.name);
+                          return (
+                            <button type="button" key={reaction.emoji} className={`reaction ${reactedByMe ? "mine" : ""}`} aria-pressed={reactedByMe} title={reaction.users.join(", ")} aria-label={`${reaction.emoji} ${reaction.users.length}: ${reaction.users.join(", ")}`} onClick={() => react(message, reaction.emoji)}>
+                              <span aria-hidden="true">{reaction.emoji}</span>{reaction.users.length}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </article>
                 );
               })}

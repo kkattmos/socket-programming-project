@@ -3,6 +3,7 @@ require("dotenv").config();
 const net = require("node:net");
 const database = require("../database/database");
 const { encodeFrame, createFrameDecoder } = require("../shared/protocol");
+const { isSingleEmoji } = require("../shared/emoji");
 const {
   CHATBOT_NAME,
   containsChatbotMention,
@@ -18,6 +19,11 @@ const registeringNames = new Set();
 const summarizingUsers = new Set();
 const chatLimit = resolveChatLimit(process.env.CHAT_LIMIT);
 let groups = new Map();
+
+// Positive BIGINT ids only; 18 digits can never overflow PostgreSQL's BIGINT.
+const MESSAGE_ID_PATTERN = /^[1-9]\d{0,17}$/;
+// One wording for "no such message" and "not your room", so outsiders can't probe which ids exist.
+const REACTION_DENIED = "You can't react to that message.";
 
 function cleanText(value, maxLength) {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
@@ -141,6 +147,27 @@ function requestSummary(socket, username, message) {
   runChatbotTask(() => summarizeChat(socket, username, room), `summary for ${username}`);
 }
 
+async function reactToMessage(socket, username, message) {
+  const { messageType } = message;
+  const messageId = String(message.messageId ?? "");
+  const emoji = typeof message.emoji === "string" ? message.emoji.trim() : "";
+  if ((messageType !== "private_message" && messageType !== "group_message") || !MESSAGE_ID_PATTERN.test(messageId)) {
+    return sendError(socket, REACTION_DENIED);
+  }
+  if (!isSingleEmoji(emoji)) return sendError(socket, "A reaction must be a single emoji.");
+
+  const result = await database.toggleReaction(username, messageType, messageId, emoji);
+  if (!result) return sendError(socket, REACTION_DENIED);
+
+  // Full list, not a delta, so every client converges on the same state.
+  const event = { type: "reaction_update", messageType, messageId, reactions: result.reactions };
+  // Same audience as the message itself: the two private room users (R7) or the group's members (R11).
+  const recipients = result.room.kind === "private"
+    ? new Set(result.room.users)
+    : groups.get(result.room.name) || new Set();
+  for (const member of recipients) send(clients.get(member), event);
+}
+
 async function handleRegisteredMessage(socket, username, message) {
   switch (message.type) {
     case "private_message": {
@@ -237,6 +264,10 @@ async function handleRegisteredMessage(socket, username, message) {
 
     case "summarize_chat":
       requestSummary(socket, username, message);
+      break;
+
+    case "react":
+      await reactToMessage(socket, username, message);
       break;
 
     default:

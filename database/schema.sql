@@ -56,3 +56,21 @@ CREATE INDEX IF NOT EXISTS group_messages_group_idx
 
 CREATE INDEX IF NOT EXISTS group_members_user_idx
   ON group_members (user_id);
+
+-- Emoji reactions: one reaction per user per message, enforced by the primary key.
+-- char_length counts code points, so 16 here is a looser backstop than the server's 16 UTF-16 code units.
+CREATE TABLE IF NOT EXISTS group_message_reactions (
+  message_id BIGINT NOT NULL REFERENCES group_messages(id) ON DELETE CASCADE,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  emoji TEXT NOT NULL CHECK (char_length(emoji) BETWEEN 1 AND 16),
+  reacted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (message_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS private_message_reactions (
+  message_id BIGINT NOT NULL REFERENCES private_messages(id) ON DELETE CASCADE,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  emoji TEXT NOT NULL CHECK (char_length(emoji) BETWEEN 1 AND 16),
+  reacted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (message_id, user_id)
+);

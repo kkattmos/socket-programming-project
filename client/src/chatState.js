@@ -35,7 +35,16 @@ export function mergeChatMessages(current, incoming, currentName) {
       : message.group;
     const room = `${message.type === "private_message" ? "private" : "group"}:${peer}`;
     const roomMessages = next[room] || [];
-    if (roomMessages.some((existing) => identity(existing) === identity(message))) continue;
+    const existingIndex = roomMessages.findIndex((existing) => identity(existing) === identity(message));
+    if (existingIndex !== -1) {
+      // Already known: only refresh its reactions, e.g. from a snapshot after the event stream reconnected.
+      if (Array.isArray(message.reactions)) {
+        next[room] = roomMessages.map((existing, index) => (
+          index === existingIndex ? { ...existing, reactions: message.reactions } : existing
+        ));
+      }
+      continue;
+    }
 
     next[room] = [...roomMessages, message].sort(
       (left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime(),
@@ -56,4 +65,32 @@ export function historyMessages(history) {
 export function applySummaryEvent(summaries, event) {
   const { kind, name, text, error } = event;
   return { ...summaries, [`${kind}:${name}`]: error ? { error } : { text } };
+}
+
+// The server sends the full reaction list for one message; replace it wherever that message is shown.
+export function applyReactionUpdate(messages, event) {
+  if (!event || event.messageId == null || !Array.isArray(event.reactions)) return messages;
+  const messageId = String(event.messageId);
+  let next = messages;
+  for (const [room, roomMessages] of Object.entries(messages)) {
+    const index = roomMessages.findIndex((message) => message.type === event.messageType && message.id === messageId);
+    if (index === -1) continue;
+    if (next === messages) next = { ...messages };
+    next[room] = roomMessages.map((message, position) => (
+      position === index ? { ...message, reactions: event.reactions } : message
+    ));
+  }
+  return next;
+}
+
+// Drops malformed entries so rendering never crashes on bad data.
+export function safeReactions(value) {
+  return Array.isArray(value)
+    ? value.filter((reaction) => (
+      reaction
+      && typeof reaction.emoji === "string"
+      && Array.isArray(reaction.users)
+      && reaction.users.length > 0
+    ))
+    : [];
 }

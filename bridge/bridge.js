@@ -36,6 +36,16 @@ function mergeMessages(current, incoming) {
   })].sort((left, right) => new Date(left.timestamp) - new Date(right.timestamp));
 }
 
+// Keep the cached history in step with live reactions, so a page refresh (status / snapshot) still shows them.
+// The server always sends the full list, so this replaces rather than merges.
+function applyReactionUpdate({ messageType, messageId, reactions }) {
+  const key = messageType === "private_message" ? "privateMessages" : messageType === "group_message" ? "groupMessages" : null;
+  if (!key || !Array.isArray(reactions)) return;
+  chatHistory[key] = chatHistory[key].map((message) => (
+    String(message.id) === String(messageId) ? { ...message, reactions } : message
+  ));
+}
+
 function rememberMessage(message) {
   if (message.type === "private_message") {
     chatHistory.privateMessages = mergeMessages(chatHistory.privateMessages, [message]);
@@ -44,6 +54,8 @@ function rememberMessage(message) {
   } else if (message.type === "history") {
     chatHistory.privateMessages = mergeMessages(chatHistory.privateMessages, message.privateMessages || []);
     chatHistory.groupMessages = mergeMessages(chatHistory.groupMessages, message.groupMessages || []);
+  } else if (message.type === "reaction_update") {
+    applyReactionUpdate(message);
   }
 }
 

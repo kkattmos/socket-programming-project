@@ -227,6 +227,11 @@ label { display: grid; gap: 6px; color: var(--text-2); font-size: 13px; font-wei
 .message.grouped { margin-top: 3px; }
 .message.mine { margin-left: auto; align-items: flex-end; }
 
+/* Letter avatar beside the first bubble of each group from other people (not Chatbot, not me).
+   Grouped follow-ups keep the same left padding, so all bubbles in a group stay aligned. */
+.message.has-avatar { position: relative; padding-left: 40px; }
+.message-avatar { position: absolute; top: 0; left: 0; }
+
 .message-meta { display: flex; gap: 8px; align-items: baseline; margin: 0 6px 3px; color: var(--muted); font-size: 12px; }
 .message-meta strong { color: var(--text-2); font-weight: 600; }
 .message.mine .message-meta strong { display: none; }

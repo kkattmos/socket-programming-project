@@ -280,7 +280,8 @@ function App() {
                   && formatTime(previous.timestamp) === formatTime(message.timestamp)
                   && new Date(message.timestamp) - new Date(previous.timestamp) < 60_000;
                 return (
-                  <article className={`message ${mine ? "mine" : ""} ${bot ? "bot" : ""} ${grouped ? "grouped" : ""}`} key={`${message.type}-${message.id || message.timestamp}-${index}`}>
+                  <article className={`message ${mine ? "mine" : ""} ${bot ? "bot" : ""} ${!mine && !bot ? "has-avatar" : ""} ${grouped ? "grouped" : ""}`} key={`${message.type}-${message.id || message.timestamp}-${index}`}>
+                    {!mine && !bot && !grouped && <span className="mini-avatar message-avatar" aria-hidden="true">{message.from[0]?.toUpperCase()}</span>}
                     {!grouped && <div className="message-meta"><strong>{message.from}</strong><time>{formatTime(message.timestamp)}</time></div>}
                     <div className="bubble">
                       <p>{message.text}</p>

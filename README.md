@@ -60,6 +60,7 @@ HF_LOCAL_MODEL=HuggingFaceTB/SmolLM2-360M-Instruct
 HF_DTYPE=q4
 HF_CACHE_DIR=.cache/huggingface
 HF_MAX_NEW_TOKENS=200
+CHAT_LIMIT=50
 ```
 
 The first `@chatbot` request downloads the quantized ONNX model into the configured cache, so it is slower than later requests and requires an internet connection. Model files in that cache are reused across server restarts, and one loaded pipeline is reused in memory while the server process remains running. Restarting the server reloads the pipeline into memory but does not download the cached files again. To run from model files already stored on the server, set `HF_LOCAL_MODEL_PATH` and set `HF_ALLOW_REMOTE_MODELS=false`.
@@ -73,6 +74,10 @@ Mention `@chatbot` anywhere in a private or group message:
 ```
 
 The server runs the prompt through the local model, saves the response as a message from `Chatbot`, and routes it through the original room. In a private room only the two participants receive it; in a group only group members receive it.
+
+### Chat summaries
+
+The **Summarize** button at the top right of a chat summarizes its last `CHAT_LIMIT` messages (default 50) with the same local model. The summary goes only to the person who pressed the button and is not saved, so it disappears when dismissed or when the page refreshes. Group summaries require membership. Each user can run one summary at a time, summaries share the model's one-at-a-time queue with `@chatbot` replies, and only the newest 6,000 characters of the chat are sent to the model.
 
 ## Start one client per physical computer
 
@@ -96,7 +101,7 @@ For frontend development, start the bridge and then run `npm run client`. The bu
 - **R10:** A user must click **Join group**; creators cannot add other users.
 - **R11:** Only joined members can send and receive group messages.
 - **Persistence:** PostgreSQL restores group membership and permitted message history after reconnecting or restarting the server.
-- **AI feature:** `@chatbot` generates a Hugging Face response inside the invoking private or group room.
+- **AI feature:** `@chatbot` generates a Hugging Face response inside the invoking private or group room, and **Summarize** gives the requester a private summary of the open chat.
 
 ## Tests
 

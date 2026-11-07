@@ -192,6 +192,36 @@ async function getGroupHistory(group, username) {
   return result.rows.map((row) => ({ ...row, type: "group_message" }));
 }
 
+async function getRecentPrivateMessages(username, peer, limit) {
+  const result = await pool.query(
+    `SELECT sender.name AS "from", pm.body AS text
+     FROM private_messages pm
+     JOIN users sender ON sender.id = pm.sender_id
+     JOIN users requester ON requester.name = $1
+     JOIN users other ON other.name = $2
+     WHERE pm.room_user_one_id = LEAST(requester.id, other.id)
+       AND pm.room_user_two_id = GREATEST(requester.id, other.id)
+     ORDER BY pm.sent_at DESC, pm.id DESC
+     LIMIT $3`,
+    [username, peer, limit],
+  );
+  return result.rows.reverse();
+}
+
+async function getRecentGroupMessages(group, limit) {
+  const result = await pool.query(
+    `SELECT sender.name AS "from", gm.body AS text
+     FROM group_messages gm
+     JOIN chat_groups g ON g.id = gm.group_id
+     JOIN users sender ON sender.id = gm.sender_id
+     WHERE g.name = $1
+     ORDER BY gm.sent_at DESC, gm.id DESC
+     LIMIT $2`,
+    [group, limit],
+  );
+  return result.rows.reverse();
+}
+
 async function clearAll() {
   if (schema === "public") throw new Error("Refusing to clear the public database schema");
   await pool.query("TRUNCATE group_messages, private_messages, group_members, chat_groups, users RESTART IDENTITY CASCADE");
@@ -212,6 +242,8 @@ module.exports = {
   saveGroupMessage,
   getHistory,
   getGroupHistory,
+  getRecentPrivateMessages,
+  getRecentGroupMessages,
   clearAll,
   close,
 };

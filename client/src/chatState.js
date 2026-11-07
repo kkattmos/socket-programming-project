@@ -52,3 +52,8 @@ export function historyMessages(history) {
     ...(Array.isArray(history.groupMessages) ? history.groupMessages : []),
   ];
 }
+
+export function applySummaryEvent(summaries, event) {
+  const { kind, name, text, error } = event;
+  return { ...summaries, [`${kind}:${name}`]: error ? { error } : { text } };
+}

@@ -377,8 +377,7 @@ function App() {
                       )}
                       {pickerOpen && (
                         <div ref={reactionPickerRef} className={`reaction-picker ${reactionPicker.placement}`} role="dialog" aria-label="Add a reaction" onKeyDown={(e) => { if (e.key === "Escape") setReactionPicker(null); }}>
-                          <input autoFocus maxLength={MAX_EMOJI_LENGTH} value={reactionDraft} onChange={(e) => handleReactionInput(message, e.target.value)} placeholder={emojiPickerHint()} aria-label="Type or pick any emoji" />
-                          {reactionDraft.trim() && <p className="reaction-hint" role="status">Pick one emoji</p>}
+                          <input autoFocus maxLength={MAX_EMOJI_LENGTH} value={reactionDraft} onChange={(e) => handleReactionInput(message, e.target.value)} placeholder={emojiPickerHint()} aria-label="Type or pick any emoji" aria-invalid={reactionDraft.trim() ? "true" : undefined} />
                           <div className="quick-reactions">
                             {QUICK_REACTIONS.map((emoji) => <button type="button" key={emoji} onClick={() => react(message, emoji)} aria-label={`React with ${emoji}`}>{emoji}</button>)}
                             <button type="button" className="more-toggle" aria-expanded={reactionPicker.expanded} aria-label={reactionPicker.expanded ? "Fewer emoji" : "More emoji"} onClick={toggleMoreReactions}>{reactionPicker.expanded ? "−" : "+"}</button>

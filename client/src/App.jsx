@@ -93,6 +93,7 @@ function App() {
           setGroups([]);
           setActiveRoom(null);
           setSummaries({});
+          setMessages({});
           setNotice("Disconnected from the server.");
         }
       } catch (error) {

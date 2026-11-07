@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { applySummaryEvent, historyMessages, mergeChatMessages } from "./chatState";
 
 async function request(url, options = {}) {
@@ -45,6 +45,7 @@ function App() {
   const [summaries, setSummaries] = useState({});
   const messageEnd = useRef(null);
   const currentName = useRef("");
+  const composerInput = useRef(null);
 
   useEffect(() => {
     request("/api/status").then((status) => {
@@ -124,6 +125,14 @@ function App() {
     messageEnd.current?.scrollIntoView({ behavior: "smooth" });
   }, [currentMessages.length]);
 
+  useLayoutEffect(() => {
+    // Auto-grow the composer before paint: reset, then fit the content. CSS max-height caps it at ~6 lines.
+    const textarea = composerInput.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${textarea.scrollHeight + textarea.offsetHeight - textarea.clientHeight}px`;
+  }, [messageText, activeRoom]);
+
   const initials = useMemo(() => connection.name.slice(0, 2).toUpperCase(), [connection.name]);
 
   async function connect(event) {
@@ -155,6 +164,14 @@ function App() {
       : { type: "group_message", group: activeRoom.name, text };
     action(payload);
     setMessageText("");
+  }
+
+  function handleComposerKeyDown(event) {
+    // Enter sends; Shift+Enter falls through to the textarea's default (new line).
+    // Skip while an IME is composing (isComposing; Safari reports keyCode 229 instead).
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    event.currentTarget.form.requestSubmit();
   }
 
   async function summarize() {
@@ -299,7 +316,7 @@ function App() {
             ) : activeGroup && !isMember ? (
               <div className="join-box"><p>You are not a member of this group.</p><button type="button" className="primary" onClick={() => action({ type: "join_group", group: activeGroup.name })}>Join group</button></div>
             ) : (
-              <form className="composer" onSubmit={sendMessage}><input autoFocus maxLength="2000" value={messageText} onChange={(e) => setMessageText(e.target.value)} placeholder={`Message ${activeRoom.name}`} /><button className="send" type="submit" disabled={!messageText.trim()}>Send</button></form>
+              <form className="composer" onSubmit={sendMessage}><textarea ref={composerInput} rows="1" autoFocus maxLength="2000" value={messageText} onChange={(e) => setMessageText(e.target.value)} onKeyDown={handleComposerKeyDown} placeholder={`Message ${activeRoom.name}`} /><button className="send" type="submit" disabled={!messageText.trim()}>Send</button></form>
             )}
           </>
         )}

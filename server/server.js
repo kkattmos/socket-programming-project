@@ -3,17 +3,27 @@ require("dotenv").config();
 const net = require("node:net");
 const database = require("../database/database");
 const { encodeFrame, createFrameDecoder } = require("../shared/protocol");
+const { isSingleEmoji } = require("../shared/emoji");
 const {
   CHATBOT_NAME,
   containsChatbotMention,
   generateChatbotReply,
+  generateChatSummary,
+  resolveChatLimit,
 } = require("../shared/ai-service");
 
 const host = process.env.CHAT_HOST || "0.0.0.0";
 const port = Number(process.env.CHAT_PORT || 5050);
 const clients = new Map();
 const registeringNames = new Set();
+const summarizingUsers = new Set();
+const chatLimit = resolveChatLimit(process.env.CHAT_LIMIT);
 let groups = new Map();
+
+// Positive BIGINT ids only; 18 digits can never overflow PostgreSQL's BIGINT.
+const MESSAGE_ID_PATTERN = /^[1-9]\d{0,17}$/;
+// One wording for "no such message" and "not your room", so outsiders can't probe which ids exist.
+const REACTION_DENIED = "You can't react to that message.";
 
 function cleanText(value, maxLength) {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
@@ -97,6 +107,65 @@ async function sendGroupChatbotReply({ group, text }) {
   };
   const members = groups.get(group) || new Set();
   for (const member of members) send(clients.get(member), botEvent);
+}
+
+function sendSummary(socket, room, fields) {
+  send(socket, { type: "chat_summary", kind: room.kind, name: room.name, ...fields });
+}
+
+async function summarizeChat(socket, username, room) {
+  try {
+    const messages = room.kind === "group"
+      ? await database.getRecentGroupMessages(room.name, chatLimit)
+      : await database.getRecentPrivateMessages(username, room.name, chatLimit);
+    if (messages.length === 0) {
+      sendSummary(socket, room, { error: "There are no messages to summarize yet." });
+      return;
+    }
+    sendSummary(socket, room, { text: await generateChatSummary(messages) });
+  } catch (error) {
+    console.error(`Chat summary error: ${error.message}`);
+    sendSummary(socket, room, { error: "Sorry, the summary could not be generated right now." });
+  } finally {
+    summarizingUsers.delete(username);
+  }
+}
+
+function requestSummary(socket, username, message) {
+  const room = { kind: message.kind, name: cleanText(message.name, 40) };
+  if ((room.kind !== "private" && room.kind !== "group") || !room.name) {
+    return sendSummary(socket, room, { error: "Choose a chat to summarize." });
+  }
+  if (room.kind === "group" && !groups.get(room.name)?.has(username)) {
+    return sendSummary(socket, room, { error: "Join this group before summarizing it." });
+  }
+  if (summarizingUsers.has(username)) {
+    return sendSummary(socket, room, { error: "A summary is already in progress." });
+  }
+
+  summarizingUsers.add(username);
+  runChatbotTask(() => summarizeChat(socket, username, room), `summary for ${username}`);
+}
+
+async function reactToMessage(socket, username, message) {
+  const { messageType } = message;
+  const messageId = String(message.messageId ?? "");
+  const emoji = typeof message.emoji === "string" ? message.emoji.trim() : "";
+  if ((messageType !== "private_message" && messageType !== "group_message") || !MESSAGE_ID_PATTERN.test(messageId)) {
+    return sendError(socket, REACTION_DENIED);
+  }
+  if (!isSingleEmoji(emoji)) return sendError(socket, "A reaction must be a single emoji.");
+
+  const result = await database.toggleReaction(username, messageType, messageId, emoji);
+  if (!result) return sendError(socket, REACTION_DENIED);
+
+  // Full list, not a delta, so every client converges on the same state.
+  const event = { type: "reaction_update", messageType, messageId, reactions: result.reactions };
+  // Same audience as the message itself: the two private room users (R7) or the group's members (R11).
+  const recipients = result.room.kind === "private"
+    ? new Set(result.room.users)
+    : groups.get(result.room.name) || new Set();
+  for (const member of recipients) send(clients.get(member), event);
 }
 
 async function handleRegisteredMessage(socket, username, message) {
@@ -192,6 +261,14 @@ async function handleRegisteredMessage(socket, username, message) {
       }
       break;
     }
+
+    case "summarize_chat":
+      requestSummary(socket, username, message);
+      break;
+
+    case "react":
+      await reactToMessage(socket, username, message);
+      break;
 
     default:
       sendError(socket, "Unknown message type.");

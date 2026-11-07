@@ -130,6 +130,95 @@ async function saveGroupMessage(group, from, text) {
   return result.rows[0];
 }
 
+// Fixed map, never user input: safe to interpolate as a table name.
+const REACTION_TABLES = {
+  private_message: "private_message_reactions",
+  group_message: "group_message_reactions",
+};
+
+// Finds the message's room and checks that `username` belongs to it, in one query.
+// No row means the message does not exist OR the user may not see it; callers treat both the same.
+const REACTION_ROOM_QUERIES = {
+  private_message: `
+    SELECT me.id AS user_id, room_one.name AS user_one, room_two.name AS user_two
+    FROM private_messages pm
+    JOIN users room_one ON room_one.id = pm.room_user_one_id
+    JOIN users room_two ON room_two.id = pm.room_user_two_id
+    JOIN users me ON me.name = $2
+    WHERE pm.id = $1 AND me.id IN (pm.room_user_one_id, pm.room_user_two_id)`,
+  group_message: `
+    SELECT me.id AS user_id, g.name AS group_name
+    FROM group_messages gm
+    JOIN chat_groups g ON g.id = gm.group_id
+    JOIN users me ON me.name = $2
+    JOIN group_members membership ON membership.group_id = gm.group_id AND membership.user_id = me.id
+    WHERE gm.id = $1`,
+};
+
+// Returns Map<messageId (string), [{ emoji, users: [name, ...] }]> for every id passed in.
+// Emoji are ordered by when they were first used and users by when they reacted, so chips don't jump around.
+async function reactionsFor(messageType, messageIds) {
+  const reactionsById = new Map(messageIds.map((id) => [String(id), []]));
+  if (messageIds.length === 0) return reactionsById;
+
+  const result = await pool.query(
+    `SELECT r.message_id, r.emoji, u.name
+     FROM ${REACTION_TABLES[messageType]} r
+     JOIN users u ON u.id = r.user_id
+     WHERE r.message_id = ANY($1::bigint[])
+     ORDER BY r.reacted_at, u.name`,
+    [messageIds],
+  );
+  for (const row of result.rows) {
+    const reactions = reactionsById.get(String(row.message_id));
+    let entry = reactions.find((reaction) => reaction.emoji === row.emoji);
+    if (!entry) {
+      entry = { emoji: row.emoji, users: [] };
+      reactions.push(entry);
+    }
+    entry.users.push(row.name);
+  }
+  return reactionsById;
+}
+
+async function withReactions(messageType, rows) {
+  const reactionsById = await reactionsFor(messageType, rows.map((row) => row.id));
+  return rows.map((row) => ({ ...row, type: messageType, reactions: reactionsById.get(String(row.id)) }));
+}
+
+// Same emoji again removes it; a different emoji replaces it; otherwise it is added.
+// Returns null when the message does not exist or the user is not in its room.
+// No transaction needed: a user has one socket, and the server processes each socket's messages in order.
+async function toggleReaction(username, messageType, messageId, emoji) {
+  const table = REACTION_TABLES[messageType];
+  if (!table) return null;
+
+  const room = await pool.query(REACTION_ROOM_QUERIES[messageType], [messageId, username]);
+  if (room.rowCount === 0) return null;
+  const { user_id: userId, user_one: userOne, user_two: userTwo, group_name: groupName } = room.rows[0];
+
+  const removed = await pool.query(
+    `DELETE FROM ${table} WHERE message_id = $1 AND user_id = $2 AND emoji = $3`,
+    [messageId, userId, emoji],
+  );
+  if (removed.rowCount === 0) {
+    await pool.query(
+      `INSERT INTO ${table} (message_id, user_id, emoji)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (message_id, user_id) DO UPDATE SET emoji = EXCLUDED.emoji, reacted_at = NOW()`,
+      [messageId, userId, emoji],
+    );
+  }
+
+  const reactions = (await reactionsFor(messageType, [messageId])).get(String(messageId));
+  return {
+    room: messageType === "private_message"
+      ? { kind: "private", users: [userOne, userTwo] }
+      : { kind: "group", name: groupName },
+    reactions,
+  };
+}
+
 async function getHistory(username) {
   const [privateResult, groupResult] = await Promise.all([
     pool.query(
@@ -166,10 +255,11 @@ async function getHistory(username) {
     ),
   ]);
 
-  return {
-    privateMessages: privateResult.rows.map((row) => ({ ...row, type: "private_message" })),
-    groupMessages: groupResult.rows.map((row) => ({ ...row, type: "group_message" })),
-  };
+  const [privateMessages, groupMessages] = await Promise.all([
+    withReactions("private_message", privateResult.rows),
+    withReactions("group_message", groupResult.rows),
+  ]);
+  return { privateMessages, groupMessages };
 }
 
 async function getGroupHistory(group, username) {
@@ -189,12 +279,46 @@ async function getGroupHistory(group, username) {
      ORDER BY timestamp ASC`,
     [group, username],
   );
-  return result.rows.map((row) => ({ ...row, type: "group_message" }));
+  return withReactions("group_message", result.rows);
+}
+
+async function getRecentPrivateMessages(username, peer, limit) {
+  const result = await pool.query(
+    `SELECT sender.name AS "from", pm.body AS text
+     FROM private_messages pm
+     JOIN users sender ON sender.id = pm.sender_id
+     JOIN users requester ON requester.name = $1
+     JOIN users other ON other.name = $2
+     WHERE pm.room_user_one_id = LEAST(requester.id, other.id)
+       AND pm.room_user_two_id = GREATEST(requester.id, other.id)
+     ORDER BY pm.sent_at DESC, pm.id DESC
+     LIMIT $3`,
+    [username, peer, limit],
+  );
+  return result.rows.reverse();
+}
+
+async function getRecentGroupMessages(group, limit) {
+  const result = await pool.query(
+    `SELECT sender.name AS "from", gm.body AS text
+     FROM group_messages gm
+     JOIN chat_groups g ON g.id = gm.group_id
+     JOIN users sender ON sender.id = gm.sender_id
+     WHERE g.name = $1
+     ORDER BY gm.sent_at DESC, gm.id DESC
+     LIMIT $2`,
+    [group, limit],
+  );
+  return result.rows.reverse();
 }
 
 async function clearAll() {
   if (schema === "public") throw new Error("Refusing to clear the public database schema");
-  await pool.query("TRUNCATE group_messages, private_messages, group_members, chat_groups, users RESTART IDENTITY CASCADE");
+  await pool.query(
+    `TRUNCATE group_message_reactions, private_message_reactions,
+              group_messages, private_messages, group_members, chat_groups, users
+     RESTART IDENTITY CASCADE`,
+  );
 }
 
 async function close() {
@@ -210,8 +334,11 @@ module.exports = {
   savePrivateMessage,
   savePrivateChatbotMessage,
   saveGroupMessage,
+  toggleReaction,
   getHistory,
   getGroupHistory,
+  getRecentPrivateMessages,
+  getRecentGroupMessages,
   clearAll,
   close,
 };

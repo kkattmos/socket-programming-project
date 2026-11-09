@@ -59,7 +59,9 @@ test("builds a summary prompt that keeps speakers, order and mentions", async ()
     { from: "Bob", text: "bye" },
   ]);
 
-  assert.match(captured.prompt, /Alice: @chatbot hi\nBob: bye/);
+  assert.match(captured.prompt, /- Alice said: "@chatbot hi"\n- Bob said: "bye"/);
+  assert.match(captured.prompt, /^Here is a chat log:/);
+  assert.match(captured.prompt, /Write a 2-3 sentence summary of this chat log in the third person/);
   assert.equal(reply, "A short summary.");
 });
 
@@ -71,7 +73,8 @@ test("caps summary input and keeps the newest messages", async () => {
   }));
   await generateChatSummary(messages);
 
-  assert.ok(captured.prompt.length <= 6000);
+  const log = captured.prompt.split("\n\n")[1];
+  assert.ok(log.length <= 6000);
   assert.ok(captured.prompt.includes("msg9"));
   assert.ok(!captured.prompt.includes("msg0"));
 });

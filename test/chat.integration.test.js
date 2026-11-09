@@ -141,7 +141,7 @@ test("routes private and group messages only through registered TCP clients", as
   const groupSummary = await summaryFor(bob, "Networks")({ type: "summarize_chat", kind: "group", name: "Networks" });
   assert.equal(groupSummary.text, "Test summary");
   assert.equal(groupSummary.kind, "group");
-  assert.match(summaryPrompt, /Chatbot: Test chatbot reply/);
+  assert.match(summaryPrompt, /- Chatbot said: "Test chatbot reply"/);
   assert.ok(!summaryPrompt.includes("members only"), "only the last CHAT_LIMIT messages are read");
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(alice.events.some((event) => event.type === "chat_summary"), false);
@@ -162,12 +162,12 @@ test("routes private and group messages only through registered TCP clients", as
 
   const privateSummary = await summaryFor(bob, "Alice")({ type: "summarize_chat", kind: "private", name: "Alice" });
   assert.equal(privateSummary.text, "Test summary");
-  assert.match(summaryPrompt, /Alice: @chatbot answer privately/);
+  assert.match(summaryPrompt, /- Alice said: "@chatbot answer privately"/);
 
   alice.send({ type: "private_message", to: "Alice", text: "note to self" });
   await alice.waitFor((event) => event.type === "private_message" && event.text === "note to self");
   await summaryFor(alice, "Alice")({ type: "summarize_chat", kind: "private", name: "Alice" });
-  assert.equal(summaryPrompt, "Alice: note to self");
+  assert.equal(summaryPrompt.split("\n\n")[1], '- Alice said: "note to self"');
 
   setGeneratorForTests(async () => { throw new Error("model failed"); });
   const failed = await summaryFor(bob, "Alice")({ type: "summarize_chat", kind: "private", name: "Alice" });
